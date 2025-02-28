@@ -79,37 +79,29 @@ def create_calendar_events(games):
     return cal
 
 def lambda_handler(event, context):
-    team_ids = event.get('team_ids', [])
-    results = {
-        'processed': [],
-        'failed': [],
-        'calendars': {}
-    }
+    team_id = event.get('queryStringParameters', {}).get('team_id')
+    if not team_id:
+        raise ValueError('team_id is required')
     
-    for team_id in team_ids:
-        try:
-            games, season = scrape_soccer_schedule(team_id)
+    try:
+        games, season = scrape_soccer_schedule(team_id)
+        
+        # Count team appearances to find my_team
+        team_counts = {}
+        for game in games:
+            team_counts[game['home_team']] = team_counts.get(game['home_team'], 0) + 1
+            team_counts[game['away_team']] = team_counts.get(game['away_team'], 0) + 1
+        
+        my_team = max(team_counts.items(), key=lambda x: x[1])[0]
+        calendar = create_calendar_events(games)
+        
+        return {
+            'calendarData': calendar.serialize(),
+            'filename': f"{season}_{my_team}_{team_id}.ics"
+        }
             
-            # Count team appearances to find my_team
-            team_counts = {}
-            for game in games:
-                team_counts[game['home_team']] = team_counts.get(game['home_team'], 0) + 1
-                team_counts[game['away_team']] = team_counts.get(game['away_team'], 0) + 1
-            
-            my_team = max(team_counts.items(), key=lambda x: x[1])[0]
-            calendar = create_calendar_events(games)
-            
-            results['calendars'][team_id] = {
-                'season': season,
-                'team': my_team,
-                'calendar_data': calendar.serialize()
-            }
-            results['processed'].append(team_id)
-            
-        except Exception as e:
-            results['failed'].append({'team_id': team_id, 'error': str(e)})
-    
-    return results
+    except Exception as e:
+        raise Exception(str(e))
 
 if __name__ == "__main__":
     team_ids = input("Enter team IDs (space separated): ").split()
