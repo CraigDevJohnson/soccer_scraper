@@ -3,6 +3,7 @@ import requests
 from ics import Calendar, Event
 from datetime import datetime, timedelta, timezone
 import re
+import json
 
 def scrape_soccer_schedule(team_id):
     
@@ -51,7 +52,7 @@ def scrape_soccer_schedule(team_id):
     
     return games, SEASON
 
-def create_calendar_events(games):
+def create_calendar_events(selected_games):
     cal = Calendar()
     mt_offset = -7
     tz = timezone(timedelta(hours=mt_offset))
@@ -59,7 +60,7 @@ def create_calendar_events(games):
     # Add calendar metadata
     cal.creator = 'Soccer Schedule Scraper'
     
-    for game in games:
+    for game in selected_games:
         event = Event()
         date_str = game['date']
         current_year = datetime.now().year
@@ -79,29 +80,101 @@ def create_calendar_events(games):
     return cal
 
 def lambda_handler(event, context):
-    team_id = event.get('queryStringParameters', {}).get('team_id')
-    if not team_id:
-        raise ValueError('team_id is required')
+    query_params = event.get('queryStringParameters', {})
+    action = query_params.get('action', 'fetch')  # Default action is fetch
     
-    try:
-        games, season = scrape_soccer_schedule(team_id)
+    if action == 'fetch':
+        team_ids_param = query_params.get('team_ids')
+        if not team_ids_param:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'team_ids is required'})
+            }
         
-        # Count team appearances to find my_team
-        team_counts = {}
-        for game in games:
-            team_counts[game['home_team']] = team_counts.get(game['home_team'], 0) + 1
-            team_counts[game['away_team']] = team_counts.get(game['away_team'], 0) + 1
+        # Split and clean team IDs
+        team_ids = [tid.strip() for tid in team_ids_param.split(',') if tid.strip()]
         
-        my_team = max(team_counts.items(), key=lambda x: x[1])[0]
-        calendar = create_calendar_events(games)
-        
-        return {
-            'calendarData': calendar.serialize(),
-            'filename': f"{season}_{my_team}_{team_id}.ics"
-        }
+        all_games = []
+        try:
+            for team_id in team_ids:
+                games, season = scrape_soccer_schedule(team_id)
+                
+                # Add team_id and season to each game for reference
+                for game in games:
+                    game['team_id'] = team_id
+                    game['season'] = season
+                    # Create a unique ID for each game
+                    game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
+                    all_games.append(game)
             
-    except Exception as e:
-        raise Exception(str(e))
+            # Sort games by date
+            all_games.sort(key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'games': all_games})
+            }
+                
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': str(e)})
+            }
+            
+    elif action == 'download':
+        games = query_params.get('games', [])
+        if not games:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': 'No games provided for calendar'})
+            }
+            
+        try:
+            calendar = create_calendar_events(games)
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'calendar': calendar.serialize(),
+                })
+            }
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({'error': str(e)})
+            }
+    
+    return {
+        'statusCode': 400,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        },
+        'body': json.dumps({'error': 'Invalid action'})
+    }
 
 if __name__ == "__main__":
     team_ids = input("Enter team IDs (space separated): ").split()
