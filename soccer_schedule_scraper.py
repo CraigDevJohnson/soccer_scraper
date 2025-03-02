@@ -90,10 +90,12 @@ def scrape_soccer_schedule(team_id):
                 
                 # Parse the game date and compare with current date
                 try:
+                    # Parse the game date
                     game_date = datetime.strptime(f"{date_time} {current_year}", "%a %m/%d %I:%M %p %Y")
-                    # If the date is in the past, assume it's next year
+                    
+                    # If the date is in the past for this year, try next year
                     if game_date < current_date:
-                        game_date = datetime.strptime(f"{date_time} {current_year + 1}", "%a %m/%d %I:%M %p %Y")
+                        game_date = game_date.replace(year=current_year + 1)
                     
                     # Only add future games
                     if game_date >= current_date:
@@ -101,7 +103,8 @@ def scrape_soccer_schedule(team_id):
                             'date': date_time,
                             'field': field,
                             'home_team': home_team,
-                            'away_team': away_team
+                            'away_team': away_team,
+                            'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")  # Store the full date for sorting
                         }
                         games.append(game)
                 except ValueError as e:
@@ -114,6 +117,13 @@ def scrape_soccer_schedule(team_id):
     
     if not games:
         raise ValueError(f"No future games found for team {team_id}. The team may not have any upcoming scheduled games.")
+    
+    # Sort games by the calculated date
+    games.sort(key=lambda x: datetime.strptime(x['calculated_date'], "%Y-%m-%d %H:%M:%S"))
+    
+    # Remove the calculated_date field before returning
+    for game in games:
+        del game['calculated_date']
     
     return games, SEASON
 
@@ -239,16 +249,14 @@ def lambda_handler(event, context):
                         'Access-Control-Allow-Origin': '*'
                     },
                     'body': json.dumps({
-                        'error': 'No games found for any of the provided team IDs',
+                        'error': 'No future games found for any of the provided team IDs',
                         'errorType': 'NoGamesFound',
                         'failed_teams': failed_teams,
                         'processed_team_ids': valid_team_ids
                     })
                 }
             
-            # Sort games by date
-            all_games.sort(key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
-            
+            # No need to sort here as games are already sorted in scrape_soccer_schedule
             response_body = {
                 'games': all_games,
                 'processed_team_ids': valid_team_ids
