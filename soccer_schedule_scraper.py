@@ -75,6 +75,8 @@ def scrape_soccer_schedule(team_id):
     current_date = datetime.now()
     current_year = current_date.year
     
+    print(f"Current date: {current_date}")  # Debug log
+    
     for row in rows:
         try:
             cells = row.find_all('td')
@@ -99,15 +101,22 @@ def scrape_soccer_schedule(team_id):
                     if game_date < current_date:
                         game_date = game_date.replace(year=current_year + 1)
                     
-                    # All games should be added now, we'll filter frontend side if needed
-                    game = {
-                        'date': date_time,
-                        'field': field,
-                        'home_team': home_team,
-                        'away_team': away_team,
-                        'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    games.append(game)
+                    print(f"Game date: {game_date}, Game: {home_team} vs {away_team}")  # Debug log
+                    
+                    # Only add future games
+                    if game_date > current_date:
+                        game = {
+                            'date': date_time,
+                            'field': field,
+                            'home_team': home_team,
+                            'away_team': away_team,
+                            'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        games.append(game)
+                        print(f"Added future game: {game}")  # Debug log
+                    else:
+                        print(f"Skipping past game: {date_time}")  # Debug log
+                        
                 except ValueError as e:
                     print(f"Warning: Error parsing date for game: {date_time} - {e}")
                     continue
@@ -118,20 +127,19 @@ def scrape_soccer_schedule(team_id):
     
     # Only raise an error if we found no games at all
     if not games:
-        raise ValueError(f"No games found for team {team_id}.")
+        print(f"No future games found for team {team_id}")  # Debug log
+        raise ValueError(f"No future games found for team {team_id}. The team may not have any upcoming scheduled games.")
     
     # Sort games by the calculated date
     games.sort(key=lambda x: datetime.strptime(x['calculated_date'], "%Y-%m-%d %H:%M:%S"))
     
-    # Filter for future games after sorting
-    future_games = [game for game in games if datetime.strptime(game['calculated_date'], "%Y-%m-%d %H:%M:%S") > current_date]
+    print(f"Found {len(games)} future games for team {team_id}")  # Debug log
     
     # Remove the calculated_date field before returning
-    for game in future_games:
+    for game in games:
         del game['calculated_date']
     
-    # Don't raise an error for no future games, let the frontend handle it
-    return future_games, SEASON
+    return games, SEASON
 
 def create_calendar_events(selected_games):
     cal = Calendar()
