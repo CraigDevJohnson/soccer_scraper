@@ -70,13 +70,13 @@ def scrape_soccer_schedule(team_id):
         SEASON = "Unknown"
 
     # Find all table rows with better error handling
-    games = []
+    all_games = []
     rows = soup.find_all('tr')
-    current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)  # Use start of today
-    current_year = current_date.year
+    current_date = datetime.now()
     
-    print(f"Current date (start of day): {current_date}")  # Debug log
+    print(f"Current date: {current_date}")  # Debug log
     
+    # First pass: collect all games to determine the season window
     for row in rows:
         try:
             cells = row.find_all('td')
@@ -87,36 +87,20 @@ def scrape_soccer_schedule(team_id):
                 away_team = cells[3].find('span').text.strip()
                 
                 if not all([date_time, field, home_team, away_team]):
-                    print(f"Warning: Skipping game row with missing data for team {team_id}")
                     continue
                 
-                # Parse the game date and compare with current date
                 try:
-                    # Parse the game date
-                    parsed_date = datetime.strptime(f"{date_time}", "%a %m/%d %I:%M %p")
-                    # Add current year
-                    game_date = parsed_date.replace(year=current_year)
+                    # Parse the game date without year
+                    game_date = datetime.strptime(date_time, "%a %m/%d %I:%M %p")
                     
-                    # If the game date with current year is in the past, use next year
-                    if game_date < current_date:
-                        game_date = game_date.replace(year=current_year + 1)
-                        
-                    print(f"Game: {date_time} -> Calculated date: {game_date}")  # Debug log
-                    
-                    # Only include games from today onwards
-                    if game_date >= current_date:
-                        game = {
-                            'date': date_time,
-                            'field': field,
-                            'home_team': home_team,
-                            'away_team': away_team,
-                            'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                        games.append(game)
-                        print(f"Added future game: {game}")  # Debug log
-                    else:
-                        print(f"Skipping past game: {date_time} ({game_date})")  # Debug log
-                        
+                    # Store the game with its parsed date
+                    all_games.append({
+                        'date': date_time,
+                        'parsed_date': game_date,
+                        'field': field,
+                        'home_team': home_team,
+                        'away_team': away_team
+                    })
                 except ValueError as e:
                     print(f"Warning: Error parsing date for game: {date_time} - {e}")
                     continue
@@ -125,21 +109,58 @@ def scrape_soccer_schedule(team_id):
             print(f"Warning: Error parsing game row for team {team_id}: {e}")
             continue
     
-    # Only raise an error if we found no games at all
-    if not games:
-        print(f"No future games found for team {team_id}")  # Debug log
-        raise ValueError(f"No future games found for team {team_id}. The team may not have any upcoming scheduled games.")
+    if not all_games:
+        raise ValueError(f"No games found for team {team_id}")
     
-    # Sort games by the calculated date
-    games.sort(key=lambda x: datetime.strptime(x['calculated_date'], "%Y-%m-%d %H:%M:%S"))
+    # Sort games by date (month/day)
+    all_games.sort(key=lambda x: x['parsed_date'].replace(year=2000))
     
-    print(f"Found {len(games)} future games for team {team_id}")  # Debug log
+    # Get first and last game dates
+    first_game = all_games[0]['parsed_date']
+    last_game = all_games[-1]['parsed_date']
     
-    # Remove the calculated_date field before returning
-    for game in games:
-        del game['calculated_date']
+    print(f"First game: {first_game.strftime('%m/%d')}")
+    print(f"Last game: {last_game.strftime('%m/%d')}")
     
-    return games, SEASON
+    # Calculate the year for the games based on current date
+    current_year = current_date.year
+    
+    # Set the year for first and last game
+    first_game = first_game.replace(year=current_year)
+    last_game = last_game.replace(year=current_year)
+    
+    # If the first game with current year is more than a week in the past,
+    # this must be next year's schedule
+    one_week_ago = current_date - timedelta(days=7)
+    if first_game < one_week_ago:
+        first_game = first_game.replace(year=current_year + 1)
+        last_game = last_game.replace(year=current_year + 1)
+    
+    # Verify the schedule is within a 9-week window (8 weeks + 1 week buffer)
+    schedule_duration = (last_game - first_game).days
+    if schedule_duration > 63:  # 9 weeks * 7 days
+        raise ValueError(f"Invalid schedule: duration ({schedule_duration} days) exceeds 9 weeks")
+    
+    # Now process games with the correct year and filter out past games
+    future_games = []
+    for game in all_games:
+        game_date = game['parsed_date']
+        # Use the same year as determined above
+        game_date = game_date.replace(year=first_game.year)
+        
+        if game_date >= current_date:
+            future_games.append({
+                'date': game['date'],
+                'field': game['field'],
+                'home_team': game['home_team'],
+                'away_team': game['away_team']
+            })
+    
+    if not future_games:
+        raise ValueError(f"No future games found for team {team_id}. All games in the current season have passed.")
+    
+    print(f"Found {len(future_games)} future games out of {len(all_games)} total games")
+    return future_games, SEASON
 
 def create_calendar_events(selected_games):
     cal = Calendar()
@@ -149,10 +170,24 @@ def create_calendar_events(selected_games):
     # Add calendar metadata
     cal.creator = 'Soccer Schedule Scraper'
     
+    # Determine the season year based on the first game
+    current_date = datetime.now()
+    current_year = current_date.year
+    
+    # Sort games to find first game date
+    sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
+    if sorted_games:
+        first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
+        first_game = first_game.replace(year=current_year)
+        
+        # If first game is more than a week in the past, use next year
+        one_week_ago = current_date - timedelta(days=7)
+        if first_game < one_week_ago:
+            current_year += 1
+    
     for game in selected_games:
         event = Event()
         date_str = game['date']
-        current_year = datetime.now().year
         dt = datetime.strptime(f"{date_str} {current_year}", "%a %m/%d %I:%M %p %Y")
         dt = dt.replace(tzinfo=tz)
         
