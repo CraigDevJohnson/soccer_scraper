@@ -138,7 +138,11 @@ def create_calendar_events(selected_games):
         event.location = f"Let's Play Soccer, Boise, 11448 W President Dr #8967, Boise, ID 83713, USA"
         event.description = f"Soccer game at Let's Play Soccer\nField {game['field']}\n{game['home_team']} vs {game['away_team']}"
         # Add reminder 40 minutes before
-        event.alarms = [{'trigger': timedelta(minutes=-40)}]
+        event.alarms = [{
+            'action': 'DISPLAY',
+            'trigger': timedelta(minutes=-40),
+            'description': f"Reminder: Soccer game on Field {game['field']}"
+        }]
         
         cal.events.add(event)
     
