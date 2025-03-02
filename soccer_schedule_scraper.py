@@ -90,21 +90,21 @@ def scrape_soccer_schedule(team_id):
                 
                 # Parse the game date and compare with current date
                 try:
-                    # Parse the game date
+                    # Parse the game date using the current year first
                     game_date = datetime.strptime(f"{date_time} {current_year}", "%a %m/%d %I:%M %p %Y")
                     
-                    # If the date is in the past for this year, try next year
+                    # If the date has already passed this year, it must be next year
                     if game_date < current_date:
                         game_date = game_date.replace(year=current_year + 1)
                     
-                    # Only add future games
-                    if game_date >= current_date:
+                    # Only add if it's a future game
+                    if game_date > current_date:
                         game = {
                             'date': date_time,
                             'field': field,
                             'home_team': home_team,
                             'away_team': away_team,
-                            'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")  # Store the full date for sorting
+                            'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")
                         }
                         games.append(game)
                 except ValueError as e:
