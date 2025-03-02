@@ -72,10 +72,10 @@ def scrape_soccer_schedule(team_id):
     # Find all table rows with better error handling
     games = []
     rows = soup.find_all('tr')
-    current_date = datetime.now()
+    current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)  # Use start of today
     current_year = current_date.year
     
-    print(f"Current date: {current_date}")  # Debug log
+    print(f"Current date (start of day): {current_date}")  # Debug log
     
     for row in rows:
         try:
@@ -92,19 +92,19 @@ def scrape_soccer_schedule(team_id):
                 
                 # Parse the game date and compare with current date
                 try:
-                    # Parse the game date without the year first
-                    game_date = datetime.strptime(f"{date_time}", "%a %m/%d %I:%M %p")
-                    # Add the current year
-                    game_date = game_date.replace(year=current_year)
+                    # Parse the game date
+                    parsed_date = datetime.strptime(f"{date_time}", "%a %m/%d %I:%M %p")
+                    # Add current year
+                    game_date = parsed_date.replace(year=current_year)
                     
-                    # If the date has already passed this year, try next year
+                    # If the game date with current year is in the past, use next year
                     if game_date < current_date:
                         game_date = game_date.replace(year=current_year + 1)
+                        
+                    print(f"Game: {date_time} -> Calculated date: {game_date}")  # Debug log
                     
-                    print(f"Game date: {game_date}, Game: {home_team} vs {away_team}")  # Debug log
-                    
-                    # Only add future games
-                    if game_date > current_date:
+                    # Only include games from today onwards
+                    if game_date >= current_date:
                         game = {
                             'date': date_time,
                             'field': field,
@@ -115,7 +115,7 @@ def scrape_soccer_schedule(team_id):
                         games.append(game)
                         print(f"Added future game: {game}")  # Debug log
                     else:
-                        print(f"Skipping past game: {date_time}")  # Debug log
+                        print(f"Skipping past game: {date_time} ({game_date})")  # Debug log
                         
                 except ValueError as e:
                     print(f"Warning: Error parsing date for game: {date_time} - {e}")
