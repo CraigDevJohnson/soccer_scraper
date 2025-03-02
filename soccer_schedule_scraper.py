@@ -90,23 +90,24 @@ def scrape_soccer_schedule(team_id):
                 
                 # Parse the game date and compare with current date
                 try:
-                    # Parse the game date using the current year first
-                    game_date = datetime.strptime(f"{date_time} {current_year}", "%a %m/%d %I:%M %p %Y")
+                    # Parse the game date without the year first
+                    game_date = datetime.strptime(f"{date_time}", "%a %m/%d %I:%M %p")
+                    # Add the current year
+                    game_date = game_date.replace(year=current_year)
                     
-                    # If the date has already passed this year, it must be next year
+                    # If the date has already passed this year, try next year
                     if game_date < current_date:
                         game_date = game_date.replace(year=current_year + 1)
                     
-                    # Only add if it's a future game
-                    if game_date > current_date:
-                        game = {
-                            'date': date_time,
-                            'field': field,
-                            'home_team': home_team,
-                            'away_team': away_team,
-                            'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                        games.append(game)
+                    # All games should be added now, we'll filter frontend side if needed
+                    game = {
+                        'date': date_time,
+                        'field': field,
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'calculated_date': game_date.strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    games.append(game)
                 except ValueError as e:
                     print(f"Warning: Error parsing date for game: {date_time} - {e}")
                     continue
@@ -115,17 +116,22 @@ def scrape_soccer_schedule(team_id):
             print(f"Warning: Error parsing game row for team {team_id}: {e}")
             continue
     
+    # Only raise an error if we found no games at all
     if not games:
-        raise ValueError(f"No future games found for team {team_id}. The team may not have any upcoming scheduled games.")
+        raise ValueError(f"No games found for team {team_id}.")
     
     # Sort games by the calculated date
     games.sort(key=lambda x: datetime.strptime(x['calculated_date'], "%Y-%m-%d %H:%M:%S"))
     
+    # Filter for future games after sorting
+    future_games = [game for game in games if datetime.strptime(game['calculated_date'], "%Y-%m-%d %H:%M:%S") > current_date]
+    
     # Remove the calculated_date field before returning
-    for game in games:
+    for game in future_games:
         del game['calculated_date']
     
-    return games, SEASON
+    # Don't raise an error for no future games, let the frontend handle it
+    return future_games, SEASON
 
 def create_calendar_events(selected_games):
     cal = Calendar()
@@ -159,6 +165,9 @@ def create_calendar_events(selected_games):
     return cal
 
 def lambda_handler(event, context):
+    # Add version identifier
+    print(f"Soccer Schedule Scraper Version: 2025-03-02-v1")
+    
     query_params = event.get('queryStringParameters', {})
     action = query_params.get('action', 'fetch')
     
@@ -241,22 +250,7 @@ def lambda_handler(event, context):
                         'errorType': e.__class__.__name__
                     })
             
-            if not all_games and failed_teams:
-                return {
-                    'statusCode': 404,
-                    'headers': {
-                        'Content-Type': 'application/json',
-                        'Access-Control-Allow-Origin': '*'
-                    },
-                    'body': json.dumps({
-                        'error': 'No future games found for any of the provided team IDs',
-                        'errorType': 'NoGamesFound',
-                        'failed_teams': failed_teams,
-                        'processed_team_ids': valid_team_ids
-                    })
-                }
-            
-            # No need to sort here as games are already sorted in scrape_soccer_schedule
+            # Return results even if some teams failed or have no future games
             response_body = {
                 'games': all_games,
                 'processed_team_ids': valid_team_ids
