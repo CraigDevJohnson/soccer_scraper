@@ -5,14 +5,39 @@ from datetime import datetime, timedelta, timezone
 import re
 import json
 
+def validate_team_id(team_id: str) -> bool:
+    """Validate that a team ID is properly formatted."""
+    if not isinstance(team_id, str):
+        return False
+    if not re.match(r'^\d{6}$', team_id):
+        return False
+    # Ensure it's a positive integer when parsed
+    try:
+        num_id = int(team_id)
+        return num_id > 0
+    except ValueError:
+        return False
+
 def scrape_soccer_schedule(team_id):
+    # Validate team ID before making request
+    if not validate_team_id(team_id):
+        raise ValueError(f"Invalid team ID format: {team_id}")
     
     # URL of the schedule page
     url = f"https://www.letsplaysoccer.com/4/teamSchedule/{team_id}"
     
     # Fetch the webpage
-    response = requests.get(url)
+    try:
+        response = requests.get(url, timeout=10)  # Add timeout
+        response.raise_for_status()  # Raise exception for bad status codes
+    except requests.RequestException as e:
+        raise RuntimeError(f"Failed to fetch schedule for team {team_id}: {str(e)}")
+    
     soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Check if page contains valid team data
+    if "Team not found" in response.text or "Invalid team" in response.text:
+        raise ValueError(f"Team ID {team_id} not found or invalid")
     
     # Find season number with simplified search
     try:
@@ -81,7 +106,7 @@ def create_calendar_events(selected_games):
 
 def lambda_handler(event, context):
     query_params = event.get('queryStringParameters', {})
-    action = query_params.get('action', 'fetch')  # Default action is fetch
+    action = query_params.get('action', 'fetch')
     
     if action == 'fetch':
         team_ids_param = query_params.get('team_ids')
@@ -98,29 +123,70 @@ def lambda_handler(event, context):
         # Split and clean team IDs
         team_ids = [tid.strip() for tid in team_ids_param.split(',') if tid.strip()]
         
+        # Validate and deduplicate team IDs
+        valid_team_ids = []
+        invalid_team_ids = []
+        seen_ids = set()
+        
+        for team_id in team_ids:
+            if team_id in seen_ids:
+                continue
+            if validate_team_id(team_id):
+                valid_team_ids.append(team_id)
+                seen_ids.add(team_id)
+            else:
+                invalid_team_ids.append(team_id)
+        
+        if not valid_team_ids:
+            return {
+                'statusCode': 400,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': 'No valid team IDs provided',
+                    'invalid_ids': invalid_team_ids
+                })
+            }
+        
         all_games = []
+        failed_teams = []
+        
         try:
-            for team_id in team_ids:
-                games, season = scrape_soccer_schedule(team_id)
-                
-                # Add team_id and season to each game for reference
-                for game in games:
-                    game['team_id'] = team_id
-                    game['season'] = season
-                    # Create a unique ID for each game
-                    game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
-                    all_games.append(game)
+            for team_id in valid_team_ids:
+                try:
+                    games, season = scrape_soccer_schedule(team_id)
+                    
+                    # Add team_id and season to each game for reference
+                    for game in games:
+                        game['team_id'] = team_id
+                        game['season'] = season
+                        game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
+                        all_games.append(game)
+                except Exception as e:
+                    failed_teams.append({'team_id': team_id, 'error': str(e)})
             
             # Sort games by date
             all_games.sort(key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
             
+            response_body = {
+                'games': all_games,
+                'processed_team_ids': valid_team_ids
+            }
+            
+            if failed_teams:
+                response_body['failed_teams'] = failed_teams
+            if invalid_team_ids:
+                response_body['invalid_team_ids'] = invalid_team_ids
+                
             return {
                 'statusCode': 200,
                 'headers': {
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*'
                 },
-                'body': json.dumps({'games': all_games})
+                'body': json.dumps(response_body)
             }
                 
         except Exception as e:
@@ -130,9 +196,14 @@ def lambda_handler(event, context):
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*'
                 },
-                'body': json.dumps({'error': str(e)})
+                'body': json.dumps({
+                    'error': str(e),
+                    'processed_team_ids': valid_team_ids,
+                    'failed_teams': failed_teams,
+                    'invalid_team_ids': invalid_team_ids
+                })
             }
-            
+    
     elif action == 'download':
         games = query_params.get('games', [])
         if not games:
