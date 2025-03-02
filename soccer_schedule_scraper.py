@@ -333,10 +333,19 @@ def lambda_handler(event, context):
         try:
             # For POST requests, the games will be in the body
             if event.get('body'):
-                body = json.loads(event.get('body', '{}'))
-                games = body.get('games', [])
+                try:
+                    body = json.loads(event.get('body', '{}'))
+                    games = body.get('games', [])
+                except json.JSONDecodeError:
+                    return {
+                        'statusCode': 400,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({'error': 'Invalid JSON in request body'})
+                    }
             else:
-                # Fallback to query parameters for GET requests
                 games = query_params.get('games', [])
 
             if not games:
@@ -352,6 +361,7 @@ def lambda_handler(event, context):
             calendar = create_calendar_events(games)
             calendar_text = calendar.serialize()
             
+            # Return the raw calendar data with correct headers
             return {
                 'statusCode': 200,
                 'headers': {
@@ -359,19 +369,23 @@ def lambda_handler(event, context):
                     'Access-Control-Allow-Origin': '*',
                     'Content-Disposition': 'attachment; filename="soccer_schedule.ics"'
                 },
-                'body': calendar_text,
-                'isBase64Encoded': False
+                'body': calendar_text
             }
+            
         except Exception as e:
+            print(f"Error generating calendar: {str(e)}")  # Add logging
             return {
                 'statusCode': 500,
                 'headers': {
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*'
                 },
-                'body': json.dumps({'error': str(e)})
+                'body': json.dumps({
+                    'error': f'Failed to generate calendar: {str(e)}',
+                    'errorType': e.__class__.__name__
+                })
             }
-    
+
     return {
         'statusCode': 400,
         'headers': {
