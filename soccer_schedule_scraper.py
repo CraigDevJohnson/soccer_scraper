@@ -330,28 +330,37 @@ def lambda_handler(event, context):
             }
     
     elif action == 'download':
-        games = query_params.get('games', [])
-        if not games:
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({'error': 'No games provided for calendar'})
-            }
-            
         try:
+            # For POST requests, the games will be in the body
+            if event.get('body'):
+                body = json.loads(event.get('body', '{}'))
+                games = body.get('games', [])
+            else:
+                # Fallback to query parameters for GET requests
+                games = query_params.get('games', [])
+
+            if not games:
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({'error': 'No games provided for calendar'})
+                }
+                
             calendar = create_calendar_events(games)
+            calendar_text = calendar.serialize()
+            
             return {
                 'statusCode': 200,
                 'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
+                    'Content-Type': 'text/calendar',
+                    'Access-Control-Allow-Origin': '*',
+                    'Content-Disposition': 'attachment; filename="soccer_schedule.ics"'
                 },
-                'body': json.dumps({
-                    'calendar': calendar.serialize(),
-                })
+                'body': calendar_text,
+                'isBase64Encoded': False
             }
         except Exception as e:
             return {
