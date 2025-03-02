@@ -209,7 +209,7 @@ def create_calendar_events(selected_games):
 
 def lambda_handler(event, context):
     # Add version identifier
-    print(f"Soccer Schedule Scraper Version: 2025-03-02-v1")
+    print(f"Soccer Schedule Scraper Version: 2025-03-02-v2")
     
     query_params = event.get('queryStringParameters', {})
     action = query_params.get('action', 'fetch')
