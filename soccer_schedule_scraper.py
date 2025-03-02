@@ -72,6 +72,8 @@ def scrape_soccer_schedule(team_id):
     # Find all table rows with better error handling
     games = []
     rows = soup.find_all('tr')
+    current_date = datetime.now()
+    current_year = current_date.year
     
     for row in rows:
         try:
@@ -86,19 +88,32 @@ def scrape_soccer_schedule(team_id):
                     print(f"Warning: Skipping game row with missing data for team {team_id}")
                     continue
                 
-                game = {
-                    'date': date_time,
-                    'field': field,
-                    'home_team': home_team,
-                    'away_team': away_team
-                }
-                games.append(game)
+                # Parse the game date and compare with current date
+                try:
+                    game_date = datetime.strptime(f"{date_time} {current_year}", "%a %m/%d %I:%M %p %Y")
+                    # If the date is in the past, assume it's next year
+                    if game_date < current_date:
+                        game_date = datetime.strptime(f"{date_time} {current_year + 1}", "%a %m/%d %I:%M %p %Y")
+                    
+                    # Only add future games
+                    if game_date >= current_date:
+                        game = {
+                            'date': date_time,
+                            'field': field,
+                            'home_team': home_team,
+                            'away_team': away_team
+                        }
+                        games.append(game)
+                except ValueError as e:
+                    print(f"Warning: Error parsing date for game: {date_time} - {e}")
+                    continue
+                
         except Exception as e:
             print(f"Warning: Error parsing game row for team {team_id}: {e}")
             continue
     
     if not games:
-        raise ValueError(f"No games found for team {team_id}. The team may not have any scheduled games.")
+        raise ValueError(f"No future games found for team {team_id}. The team may not have any upcoming scheduled games.")
     
     return games, SEASON
 
