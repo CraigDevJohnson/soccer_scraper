@@ -1,4 +1,5 @@
 *.ics
 *.zip
 *.json
+*.pyc
 admin/
