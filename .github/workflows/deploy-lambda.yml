@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -36,4 +40,4 @@ jobs:
 
       - name: Deploy to Lambda
         run: |
-          aws lambda update-function-code --function-name soccer-schedule-scraper --zip-file fileb://function.zip
+          aws lambda update-function-code --function-name soccer_schedule_scraper --zip-file fileb://function.zip
