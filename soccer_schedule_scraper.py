@@ -1,12 +1,34 @@
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup  # Keep for potential future HTML parsing needs
 import requests
 from ics import Calendar, Event
 from datetime import datetime, timedelta, timezone
 import re
 import json
 
+"""
+Soccer Schedule Scraper Lambda Function
+
+This Lambda function provides two main functionalities:
+1. Fetch soccer game schedules for specified team IDs from the LPS API
+2. Generate downloadable ICS calendar files for the retrieved games
+
+It's designed to be called from the portfolio website through AWS Lambda,
+with authentication handled via Cognito Identity Pool.
+"""
+
 def validate_team_id(team_id: str) -> bool:
-    """Validate that a team ID is properly formatted."""
+    """
+    Validate that a team ID is properly formatted.
+    
+    Args:
+        team_id (str): The team ID to validate
+        
+    Returns:
+        bool: True if the team ID is valid
+        
+    Raises:
+        ValueError: If the team ID is invalid with specific error message
+    """
     if not isinstance(team_id, str):
         raise ValueError("Team ID must be a string")
     if not team_id.strip():
@@ -25,6 +47,19 @@ def validate_team_id(team_id: str) -> bool:
         raise ValueError(f"Team ID '{team_id}' must be a valid number")
 
 def get_team_schedule_from_api(team_id):
+    """
+    Fetch team schedule data from the LPS API.
+    
+    Args:
+        team_id (str): The 6-digit team ID to fetch schedule for
+        
+    Returns:
+        tuple: (list of game dictionaries, season string, team_name string)
+        
+    Raises:
+        ValueError: For validation or data structure errors
+        RuntimeError: For network or parsing errors
+    """
     # Validate team ID before making request
     try:
         validate_team_id(team_id)
@@ -36,7 +71,7 @@ def get_team_schedule_from_api(team_id):
     
     # Fetch the data from API
     try:
-        response = requests.get(url, timeout=10)  # Add timeout
+        response = requests.get(url, timeout=10)  # Add timeout for better error handling
         response.raise_for_status()  # Raise exception for bad status codes
     except requests.Timeout:
         raise RuntimeError(f"Request timed out while fetching schedule for team {team_id}. Please try again.")
@@ -59,9 +94,13 @@ def get_team_schedule_from_api(team_id):
     if "team" not in data:
         raise ValueError(f"Team ID {team_id} not found. Please verify the team code is correct.")
     
-    # Extract the season number
+    # Extract the season number and team name directly from API response
     team_data = data["team"]
     SEASON = str(team_data.get("Season", "Unknown"))
+    TEAM_NAME = team_data.get("team_name", "Unknown Team")
+    
+    # Debug log
+    print(f"Team Name: {TEAM_NAME}, Season: {SEASON}")
     
     # Get games data
     if "games" not in data or not isinstance(data["games"], list):
@@ -70,7 +109,7 @@ def get_team_schedule_from_api(team_id):
     # Process games
     all_games = []
     # Get current date with timezone info to match the game dates
-    mt_offset = -7
+    mt_offset = -7  # Mountain Time offset
     tz = timezone(timedelta(hours=mt_offset))
     current_date = datetime.now(tz)
     
@@ -94,7 +133,7 @@ def get_team_schedule_from_api(team_id):
             try:
                 game_date = datetime.fromisoformat(game_datetime.replace("Z", "+00:00"))
                 
-                # Convert to local time (assuming MT timezone for consistency with original code)
+                # Convert to local time (assuming MT timezone for consistency)
                 game_date = game_date.astimezone(tz)
                 
                 # Format the date as it was in the original scraper
@@ -120,9 +159,18 @@ def get_team_schedule_from_api(team_id):
         raise ValueError(f"No games found for team {team_id}.")
     
     print(f"Found {len(all_games)} games for team {team_id}")
-    return all_games, SEASON
+    return all_games, SEASON, TEAM_NAME
 
 def create_calendar_events(selected_games):
+    """
+    Create an ICS calendar file from a list of games.
+    
+    Args:
+        selected_games (list): List of game dictionaries
+        
+    Returns:
+        str: ICS calendar content as a string
+    """
     cal = Calendar()
     mt_offset = -7
     tz = timezone(timedelta(hours=mt_offset))
@@ -153,11 +201,10 @@ def create_calendar_events(selected_games):
         
         event.name = f"{game['home_team']} vs {game['away_team']}"
         event.begin = dt
-        event.duration = {'hours': .75}
+        event.duration = {'hours': .75}  # 45 minutes duration
         event.location = f"Let's Play Soccer, Boise, 11448 W President Dr #8967, Boise, ID 83713, USA"
         event.description = f"Soccer game at Let's Play Soccer\nField {game['field']}\n{game['home_team']} vs {game['away_team']}"
         
-        # We'll add alarms later by directly editing the ICS output
         cal.events.add(event)
     
     # Serialize the calendar to get the basic structure
@@ -179,13 +226,28 @@ END:VALARM
     return ics_content
 
 def lambda_handler(event, context):
-    # Add version identifier
-    print(f"Soccer Schedule API Version: 2025-03-02-v3")
+    """
+    AWS Lambda function handler.
     
-    query_params = event.get('queryStringParameters', {})
+    Supports two actions:
+    - 'fetch': Get games for specified team IDs
+    - 'download': Generate downloadable ICS calendar file
+    
+    Args:
+        event (dict): Lambda event data
+        context: Lambda context
+        
+    Returns:
+        dict: Lambda response with appropriate status code and body
+    """
+    # Add version identifier for logging
+    print(f"Soccer Schedule API Version: 2025-03-02-v5")
+    
+    query_params = event.get('queryStringParameters', {}) or {}  # Handle None case
     action = query_params.get('action', 'fetch')
     
     if action == 'fetch':
+        # FETCH ACTION: Get schedules for provided team IDs
         team_ids_param = query_params.get('team_ids')
         if not team_ids_param:
             return {
@@ -243,18 +305,20 @@ def lambda_handler(event, context):
                 })
             }
         
+        # Process valid team IDs
         all_games = []
         failed_teams = []
         
         try:
             for team_id in valid_team_ids:
                 try:
-                    games, season = get_team_schedule_from_api(team_id)
+                    games, season, team_name = get_team_schedule_from_api(team_id)
                     
                     # Add team_id and season to each game for reference
                     for game in games:
                         game['team_id'] = team_id
                         game['season'] = season
+                        game['team_name'] = team_name  # Add the team name from API to each game
                         game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
                         all_games.append(game)
                 except Exception as e:
@@ -301,6 +365,7 @@ def lambda_handler(event, context):
             }
     
     elif action == 'download':
+        # DOWNLOAD ACTION: Generate ICS calendar file
         try:
             # For POST requests, the games will be in the body
             if event.get('body'):
@@ -355,28 +420,8 @@ def lambda_handler(event, context):
                     'errorType': e.__class__.__name__
                 })
             }
-
-    return {
-        'statusCode': 400,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps({'error': 'Invalid action'})
-    }
-    print(f"Error generating calendar: {str(e)}")  # Add logging
-    return {
-        'statusCode': 500,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps({
-            'error': f'Failed to generate calendar: {str(e)}',
-            'errorType': e.__class__.__name__
-        })
-    }
-
+    
+    # Default error for invalid action
     return {
         'statusCode': 400,
         'headers': {
@@ -387,6 +432,10 @@ def lambda_handler(event, context):
     }
 
 if __name__ == "__main__":
+    """
+    CLI mode for local testing of the soccer schedule scraper.
+    This allows testing the Lambda functionality from the command line.
+    """
     team_ids = input("Enter team IDs (space separated): ").split()
     processed = []
     failed = []
@@ -394,24 +443,23 @@ if __name__ == "__main__":
     for team_id in team_ids:
         print(f"\nProcessing team ID: {team_id}")
         try:
-            games, season = get_team_schedule_from_api(team_id)
+            # Get schedule data including team name directly from API
+            games, season, team_name = get_team_schedule_from_api(team_id)
+            print(f"Team: {team_name}")
             print(f"Season: {season}")
             print(f"Found {len(games)} games:")
             
-            # Count team appearances
-            team_counts = {}
+            # Print game details
             for game in games:
-                team_counts[game['home_team']] = team_counts.get(game['home_team'], 0) + 1
-                team_counts[game['away_team']] = team_counts.get(game['away_team'], 0) + 1
                 print(f"\nDate/Time: {game['date']}")
                 print(f"Field: {game['field']}")
                 print(f"Home Team: {game['home_team']}")
                 print(f"Away Team: {game['away_team']}")
                 print("-" * 40)
             
-            my_team = max(team_counts.items(), key=lambda x: x[1])[0]
+            # Create calendar using team name from API response
             calendar_text = create_calendar_events(games)
-            calendar_file = f"{season}_{my_team}_{team_id}.ics"
+            calendar_file = f"{season}_{team_name}_{team_id}.ics"
             
             with open(calendar_file, 'w', newline='\r\n') as f:
                 f.write(calendar_text)
