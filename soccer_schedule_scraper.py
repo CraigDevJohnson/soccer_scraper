@@ -24,17 +24,17 @@ def validate_team_id(team_id: str) -> bool:
             raise e
         raise ValueError(f"Team ID '{team_id}' must be a valid number")
 
-def scrape_soccer_schedule(team_id):
+def get_team_schedule_from_api(team_id):
     # Validate team ID before making request
     try:
         validate_team_id(team_id)
     except ValueError as e:
         raise ValueError(str(e))
     
-    # URL of the schedule page
-    url = f"https://www.letsplaysoccer.com/4/teamSchedule/{team_id}"
+    # URL of the API endpoint
+    url = f"https://lps-api-prod.lps-test.com/teams/{team_id}"
     
-    # Fetch the webpage
+    # Fetch the data from API
     try:
         response = requests.get(url, timeout=10)  # Add timeout
         response.raise_for_status()  # Raise exception for bad status codes
@@ -45,130 +45,91 @@ def scrape_soccer_schedule(team_id):
     except requests.RequestException as e:
         raise RuntimeError(f"Failed to fetch schedule for team {team_id}: {str(e)}")
     
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Check if page contains valid team data
-    if "Team not found" in response.text:
-        raise ValueError(f"Team ID {team_id} not found. Please verify the team code is correct.")
-    if "Invalid team" in response.text:
-        raise ValueError(f"Team ID {team_id} is invalid. Please verify the team code is correct.")
-    
-    # Find season number with better error handling
+    # Parse JSON response
     try:
-        team_header = soup.find('h4', class_='text-md-40-24')
-        SEASON = "Unknown"
-        if team_header:
-            next_elem = team_header.find_next_sibling()
-            if next_elem:
-                text_content = next_elem.get_text(strip=True)
-                if 'Season:' in text_content:
-                    match = re.search(r'Season:(\d+)', text_content)
-                    if match:
-                        SEASON = match.group(1)
-    except Exception as e:
-        print(f"Warning: Error extracting season for team {team_id}: {e}")
-        SEASON = "Unknown"
-
-    # Find all table rows with better error handling
+        data = response.json()
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Failed to parse API response for team {team_id}: {str(e)}")
+    
+    # Check if the response contains the expected data
+    if not data or not isinstance(data, dict):
+        raise ValueError(f"Invalid API response for team {team_id}")
+    
+    # Check if team data exists
+    if "team" not in data:
+        raise ValueError(f"Team ID {team_id} not found. Please verify the team code is correct.")
+    
+    # Extract the season number
+    team_data = data["team"]
+    SEASON = str(team_data.get("Season", "Unknown"))
+    
+    # Get games data
+    if "games" not in data or not isinstance(data["games"], list):
+        raise ValueError(f"No games data found for team {team_id}")
+    
+    # Process games
     all_games = []
-    rows = soup.find_all('tr')
-    current_date = datetime.now()
+    # Get current date with timezone info to match the game dates
+    mt_offset = -7
+    tz = timezone(timedelta(hours=mt_offset))
+    current_date = datetime.now(tz)
     
     print(f"Current date: {current_date}")  # Debug log
     
-    # First pass: collect all games to determine the season window
-    for row in rows:
+    for game in data["games"]:
         try:
-            cells = row.find_all('td')
-            if len(cells) == 5:  # Verify it's a game row
-                date_time = cells[0].text.strip()
-                field = cells[1].text.strip().split(' ')[1]  # Extract just the number
-                home_team = cells[2].find('span').text.strip()
-                away_team = cells[3].find('span').text.strip()
+            # Extract game details
+            game_datetime = game.get("SchedGameDateTime")
+            field = game.get("field_name", "").replace("Field ", "") if game.get("field_name") else str(game.get("Field", ""))
+            
+            # Get home and away team info
+            home_team = game.get("home_team", {}).get("team_name", "")
+            away_team = game.get("visitor_team", {}).get("team_name", "")
+            
+            if not all([game_datetime, field, home_team, away_team]):
+                print(f"Warning: Missing game data for game in team {team_id}")
+                continue
+            
+            # Parse the game datetime from ISO format
+            try:
+                game_date = datetime.fromisoformat(game_datetime.replace("Z", "+00:00"))
                 
-                if not all([date_time, field, home_team, away_team]):
-                    continue
+                # Convert to local time (assuming MT timezone for consistency with original code)
+                game_date = game_date.astimezone(tz)
                 
-                try:
-                    # Parse the game date without year
-                    game_date = datetime.strptime(date_time, "%a %m/%d %I:%M %p")
-                    
-                    # Store the game with its parsed date
+                # Format the date as it was in the original scraper
+                formatted_date = game_date.strftime("%a %m/%d %I:%M %p")
+                
+                # Only show future games (may add an option to include past games)
+                if game_date >= current_date:
                     all_games.append({
-                        'date': date_time,
-                        'parsed_date': game_date,
+                        'date': formatted_date,
                         'field': field,
                         'home_team': home_team,
                         'away_team': away_team
                     })
-                except ValueError as e:
-                    print(f"Warning: Error parsing date for game: {date_time} - {e}")
-                    continue
+            except ValueError as e:
+                print(f"Warning: Error parsing date for game: {game_datetime} - {e}")
+                continue
                 
         except Exception as e:
-            print(f"Warning: Error parsing game row for team {team_id}: {e}")
+            print(f"Warning: Error parsing game data for team {team_id}: {e}")
             continue
     
     if not all_games:
-        raise ValueError(f"No games found for team {team_id}")
+        raise ValueError(f"No games found for team {team_id}.")
     
-    # Sort games by date (month/day)
-    all_games.sort(key=lambda x: x['parsed_date'].replace(year=2000))
-    
-    # Get first and last game dates
-    first_game = all_games[0]['parsed_date']
-    last_game = all_games[-1]['parsed_date']
-    
-    print(f"First game: {first_game.strftime('%m/%d')}")
-    print(f"Last game: {last_game.strftime('%m/%d')}")
-    
-    # Calculate the year for the games based on current date
-    current_year = current_date.year
-    
-    # Set the year for first and last game
-    first_game = first_game.replace(year=current_year)
-    last_game = last_game.replace(year=current_year)
-    
-    # If the first game with current year is more than a week in the past,
-    # this must be next year's schedule
-    one_week_ago = current_date - timedelta(days=7)
-    if first_game < one_week_ago:
-        first_game = first_game.replace(year=current_year + 1)
-        last_game = last_game.replace(year=current_year + 1)
-    
-    # Verify the schedule is within a 9-week window (8 weeks + 1 week buffer)
-    schedule_duration = (last_game - first_game).days
-    if schedule_duration > 63:  # 9 weeks * 7 days
-        raise ValueError(f"Invalid schedule: duration ({schedule_duration} days) exceeds 9 weeks")
-    
-    # Now process games with the correct year and filter out past games
-    future_games = []
-    for game in all_games:
-        game_date = game['parsed_date']
-        # Use the same year as determined above
-        game_date = game_date.replace(year=first_game.year)
-        
-        if game_date >= current_date:
-            future_games.append({
-                'date': game['date'],
-                'field': game['field'],
-                'home_team': game['home_team'],
-                'away_team': game['away_team']
-            })
-    
-    if not future_games:
-        raise ValueError(f"No future games found for team {team_id}. All games in the current season have passed.")
-    
-    print(f"Found {len(future_games)} future games out of {len(all_games)} total games")
-    return future_games, SEASON
+    print(f"Found {len(all_games)} games for team {team_id}")
+    return all_games, SEASON
 
+def create_calendar_events(selected_games):
 def create_calendar_events(selected_games):
     cal = Calendar()
     mt_offset = -7
     tz = timezone(timedelta(hours=mt_offset))
     
     # Add calendar metadata
-    cal.creator = 'Soccer Schedule Scraper'
+    cal.creator = 'Soccer Schedule API'
     
     # Determine the season year based on the first game
     current_date = datetime.now()
@@ -196,20 +157,31 @@ def create_calendar_events(selected_games):
         event.duration = {'hours': .75}
         event.location = f"Let's Play Soccer, Boise, 11448 W President Dr #8967, Boise, ID 83713, USA"
         event.description = f"Soccer game at Let's Play Soccer\nField {game['field']}\n{game['home_team']} vs {game['away_team']}"
-        # Add reminder 40 minutes before
-        event.alarms = [{
-            'action': 'DISPLAY',
-            'trigger': timedelta(minutes=-40),
-            'description': f"Reminder: Soccer game on Field {game['field']}"
-        }]
         
+        # We'll add alarms later by directly editing the ICS output
         cal.events.add(event)
     
-    return cal
+    # Serialize the calendar to get the basic structure
+    ics_content = cal.serialize()
+    
+    # Inject proper VALARM components for each VEVENT
+    # Find all VEVENT blocks and add a VALARM with 40-minute reminder to each
+    pattern = r'(END:VEVENT)'
+    valarm_block = """
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Reminder: Soccer game starting soon
+TRIGGER:-PT40M
+END:VALARM
+"""
+    # Insert the VALARM block before each END:VEVENT
+    ics_content = re.sub(pattern, f"{valarm_block}\\1", ics_content)
+    
+    return ics_content
 
 def lambda_handler(event, context):
     # Add version identifier
-    print(f"Soccer Schedule Scraper Version: 2025-03-02-v2")
+    print(f"Soccer Schedule API Version: 2025-03-02-v3")
     
     query_params = event.get('queryStringParameters', {})
     action = query_params.get('action', 'fetch')
@@ -278,7 +250,7 @@ def lambda_handler(event, context):
         try:
             for team_id in valid_team_ids:
                 try:
-                    games, season = scrape_soccer_schedule(team_id)
+                    games, season = get_team_schedule_from_api(team_id)
                     
                     # Add team_id and season to each game for reference
                     for game in games:
@@ -358,8 +330,7 @@ def lambda_handler(event, context):
                     'body': json.dumps({'error': 'No games provided for calendar'})
                 }
                 
-            calendar = create_calendar_events(games)
-            calendar_text = calendar.serialize()
+            calendar_text = create_calendar_events(games)
             
             # Return the raw calendar data with correct headers
             return {
@@ -394,6 +365,27 @@ def lambda_handler(event, context):
         },
         'body': json.dumps({'error': 'Invalid action'})
     }
+            print(f"Error generating calendar: {str(e)}")  # Add logging
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': f'Failed to generate calendar: {str(e)}',
+                    'errorType': e.__class__.__name__
+                })
+            }
+
+    return {
+        'statusCode': 400,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        },
+        'body': json.dumps({'error': 'Invalid action'})
+    }
 
 if __name__ == "__main__":
     team_ids = input("Enter team IDs (space separated): ").split()
@@ -403,7 +395,7 @@ if __name__ == "__main__":
     for team_id in team_ids:
         print(f"\nProcessing team ID: {team_id}")
         try:
-            games, season = scrape_soccer_schedule(team_id)
+            games, season = get_team_schedule_from_api(team_id)
             print(f"Season: {season}")
             print(f"Found {len(games)} games:")
             
@@ -419,11 +411,11 @@ if __name__ == "__main__":
                 print("-" * 40)
             
             my_team = max(team_counts.items(), key=lambda x: x[1])[0]
-            calendar = create_calendar_events(games)
+            calendar_text = create_calendar_events(games)
             calendar_file = f"{season}_{my_team}_{team_id}.ics"
             
             with open(calendar_file, 'w', newline='\r\n') as f:
-                f.write(calendar.serialize())
+                f.write(calendar_text)
             print(f"\nCalendar file '{calendar_file}' created successfully!")
             processed.append(team_id)
             
