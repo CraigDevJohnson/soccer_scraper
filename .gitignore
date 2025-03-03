@@ -2,3 +2,4 @@
 *.zip
 *.json
 admin/
+__pycache__/

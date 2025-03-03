@@ -123,7 +123,6 @@ def get_team_schedule_from_api(team_id):
     return all_games, SEASON
 
 def create_calendar_events(selected_games):
-def create_calendar_events(selected_games):
     cal = Calendar()
     mt_offset = -7
     tz = timezone(timedelta(hours=mt_offset))
@@ -365,18 +364,18 @@ def lambda_handler(event, context):
         },
         'body': json.dumps({'error': 'Invalid action'})
     }
-            print(f"Error generating calendar: {str(e)}")  # Add logging
-            return {
-                'statusCode': 500,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*'
-                },
-                'body': json.dumps({
-                    'error': f'Failed to generate calendar: {str(e)}',
-                    'errorType': e.__class__.__name__
-                })
-            }
+    print(f"Error generating calendar: {str(e)}")  # Add logging
+    return {
+        'statusCode': 500,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        },
+        'body': json.dumps({
+            'error': f'Failed to generate calendar: {str(e)}',
+            'errorType': e.__class__.__name__
+        })
+    }
 
     return {
         'statusCode': 400,
