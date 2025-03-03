@@ -1,2 +1,4 @@
 *.ics
 *.zip
+*.json
+admin/
