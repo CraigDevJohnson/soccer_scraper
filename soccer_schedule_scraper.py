@@ -139,14 +139,14 @@ def get_team_schedule_from_api(team_id):
                 formatted_date = game_date.strftime("%a %m/%d %I:%M %p")
                 
                 # Convert to string with timezone info for passing to ICS
-                game_date = game_date.isoformat()
+                game_str = game_date.isoformat()
 
                 # Only show future games (may add an option to include past games)
                 if game_date >= current_date:
                     all_games.append({
                         'game_id': game_id,
                         'date': formatted_date,
-                        'date_str': game_date,
+                        'date_str': game_str,
                         'field': field,
                         'home_team': home_team,
                         'away_team': away_team
@@ -209,9 +209,9 @@ def create_calendar_events(selected_games):
     for game in selected_games:
         event = Event()
         
-        # Use the datetime object if available, otherwise parse from string
+        # Convert the game date string to a datetime object
         if 'date_str' in game:
-            game_datetime = game['date_str']
+            game_datetime = datetime.fromisoformat(game['date_str'])
         else:
             # Fallback for backward compatibility
             date_str = game['date']
