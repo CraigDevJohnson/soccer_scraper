@@ -210,8 +210,8 @@ def create_calendar_events(selected_games):
         event = Event()
         
         # Convert the game date string to a datetime object
-        if 'date_str' in game:
-            game_datetime = datetime.fromisoformat(game['date_str'])
+        # if:
+        game_datetime = datetime.fromisoformat(game['date_str'])
         # else:
         #     # Fallback for backward compatibility
         #     date_str = game['date']
