@@ -192,11 +192,14 @@ def create_calendar_events(selected_games):
         if game_datetime.tzinfo is None:
             game_datetime = game_datetime.replace(tzinfo=tz)
         
+        # Add 7 hours to match UTC time as that is what will be serialized when making the ics file
+        utc_gametime = game_datetime + timedelta(hours=7)  # Add 7 hours to match UTC time
+        
         # List of special teams
         special_teams = ['MIXED BAG FC', 'LOOKING TO SCORE', 'NO BUENO O30', 'EYE CANDY']
 
         event.name = f"{game['home_team']} vs {game['away_team']}"
-        event.begin = game_datetime
+        event.begin = utc_gametime
         event.duration = {'hours': .75}  # 45 minutes duration
         event.location = f"Let's Play Soccer, Boise, 11448 W President Dr #8967, Boise, ID 83713, USA"
         event.description = f"Field {game['field']}\nSoccer game at Let's Play Soccer\n{game['home_team']} vs {game['away_team']}\nGLHF!"
