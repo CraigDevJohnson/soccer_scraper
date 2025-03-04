@@ -79,7 +79,7 @@ def get_team_schedule_from_api(team_id):
     except requests.ConnectionError:
         raise RuntimeError(f"Connection error while fetching schedule for team {team_id}. Please check your internet connection.")
     except requests.RequestException as e:
-        raise RuntimeError(f"Failed to fetch schedule for team {team_id}: {str(e)}")
+        raise RuntimeError(f"Could not fetch any schedule, make sure team ID is accurate.")
     
     # Parse JSON response
     try:
@@ -196,7 +196,7 @@ def create_calendar_events(selected_games):
     # Year determination logic remains for backward compatibility
     if sorted_games:
         if 'date_str' in sorted_games[0]:
-            first_game = sorted_games[0]['date_str']
+            first_game = datetime.fromisoformat(sorted_games[0]['date_str'])
         else:
             first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
             first_game = first_game.replace(year=current_year)
