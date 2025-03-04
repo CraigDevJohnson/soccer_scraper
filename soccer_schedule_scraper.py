@@ -193,7 +193,7 @@ def create_calendar_events(selected_games):
             game_datetime = game_datetime.replace(tzinfo=tz)
         
         # Add 7 hours to match UTC time as that is what will be serialized when making the ics file
-        utc_gametime = game_datetime + timedelta(hours=7)  # Add 7 hours to match UTC time
+        utc_gametime = game_datetime - timedelta(hours=7)  # Add 7 hours to match UTC time
         
         # List of special teams
         special_teams = ['MIXED BAG FC', 'LOOKING TO SCORE', 'NO BUENO O30', 'EYE CANDY']
