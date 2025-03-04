@@ -248,7 +248,27 @@ END:VALARM
 """
     # Insert the VALARM block before each END:VEVENT
     ics_content = re.sub(pattern, f"{valarm_block}\\1", ics_content)
-    
+    # Add this before returning the ics_content
+    timezone_block = """
+BEGIN:VTIMEZONE
+TZID:America/Denver
+BEGIN:STANDARD
+DTSTART:20241103T020000
+TZOFFSETFROM:-0600
+TZOFFSETTO:-0700
+RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:20250309T020000
+TZOFFSETFROM:-0700
+TZOFFSETTO:-0600
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+END:DAYLIGHT
+END:VTIMEZONE
+"""
+
+    # Find where to insert the timezone block (after BEGIN:VCALENDAR)
+    ics_content = ics_content.replace("BEGIN:VCALENDAR", f"BEGIN:VCALENDAR\n{timezone_block}")
     return ics_content
 
 def lambda_handler(event, context):
