@@ -4,6 +4,7 @@ from ics import Calendar, Event
 from datetime import datetime, timedelta, timezone
 import re
 import json
+import pandas
 
 """
 Soccer Schedule Scraper Lambda Function
@@ -68,7 +69,7 @@ def get_team_schedule_from_api(team_id):
     
     # URL of the API endpoint
     url = f"https://lps-api-prod.lps-test.com/teams/{team_id}"
-    
+
     # Fetch the data from API
     try:
         response = requests.get(url, timeout=10)  # Add timeout for better error handling
@@ -111,13 +112,14 @@ def get_team_schedule_from_api(team_id):
     # Get current date with timezone info to match the game dates
     mt_offset = -7  # Mountain Time offset
     tz = timezone(timedelta(hours=mt_offset))
-    current_date = datetime.now(tz)
+    current_date = (pandas.to_datetime(datetime.now(tz))).round('min')
     
     print(f"Current date: {current_date}")  # Debug log
     
     for game in data["games"]:
         try:
             # Extract game details
+            game_id = game.get("game_id", "")
             game_datetime = game.get("SchedGameDateTime")
             field = game.get("field_name", "").replace("Field ", "") if game.get("field_name") else str(game.get("Field", ""))
             
@@ -131,7 +133,7 @@ def get_team_schedule_from_api(team_id):
             
             # Parse the game datetime from ISO format
             try:
-                game_date = datetime.fromisoformat(game_datetime.replace("Z", "+00:00"))
+                game_date = datetime.fromisoformat(game_datetime.replace("Z", "07:00"))
                 
                 # Convert to local time (assuming MT timezone for consistency)
                 game_date = game_date.astimezone(tz)
@@ -142,7 +144,9 @@ def get_team_schedule_from_api(team_id):
                 # Only show future games (may add an option to include past games)
                 if game_date >= current_date:
                     all_games.append({
+                        'game_id': game_id,
                         'date': formatted_date,
+                        'datetime_obj': game_date,
                         'field': field,
                         'home_team': home_team,
                         'away_team': away_team
@@ -156,7 +160,7 @@ def get_team_schedule_from_api(team_id):
             continue
     
     if not all_games:
-        raise ValueError(f"No games found for team {team_id}.")
+        raise ValueError(f"No upcoming games found for the provided team.")
     
     print(f"Found {len(all_games)} games for team {team_id}")
     return all_games, SEASON, TEAM_NAME
@@ -177,16 +181,25 @@ def create_calendar_events(selected_games):
     
     # Add calendar metadata
     cal.creator = 'Soccer Schedule API'
-    
+
     # Determine the season year based on the first game
     current_date = datetime.now()
     current_year = current_date.year
     
-    # Sort games to find first game date
-    sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
+    # Sort games by datetime_obj if available, otherwise by parsed date string
+    if selected_games and 'datetime_obj' in selected_games[0]:
+        sorted_games = sorted(selected_games, key=lambda x: x['datetime_obj'])
+    else:
+        # Fallback to string parsing if datetime_obj isn't available
+        sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
+    
+    # Year determination logic remains for backward compatibility
     if sorted_games:
-        first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
-        first_game = first_game.replace(year=current_year)
+        if 'datetime_obj' in sorted_games[0]:
+            first_game = sorted_games[0]['datetime_obj']
+        else:
+            first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
+            first_game = first_game.replace(year=current_year)
         
         # If first game is more than a week in the past, use next year
         one_week_ago = current_date - timedelta(days=7)
@@ -195,15 +208,28 @@ def create_calendar_events(selected_games):
     
     for game in selected_games:
         event = Event()
-        date_str = game['date']
-        dt = datetime.strptime(f"{date_str} {current_year}", "%a %m/%d %I:%M %p %Y")
-        dt = dt.replace(tzinfo=tz)
         
+        # Use the datetime object if available, otherwise parse from string
+        if 'datetime_obj' in game:
+            game_datetime = game['datetime_obj']
+        else:
+            # Fallback for backward compatibility
+            date_str = game['date']
+            game_datetime = datetime.strptime(f"{date_str} {current_year}", "%a %m/%d %I:%M %p %Y")
+            game_datetime = game_datetime.replace(tzinfo=tz)
+
+        # List of special teams
+        special_teams = ['MIXED BAG FC', 'LOOKING TO SCORE', 'NO BUENO O30', 'EYE CANDY']
+
         event.name = f"{game['home_team']} vs {game['away_team']}"
-        event.begin = dt
+        event.begin = game_datetime
         event.duration = {'hours': .75}  # 45 minutes duration
         event.location = f"Let's Play Soccer, Boise, 11448 W President Dr #8967, Boise, ID 83713, USA"
-        event.description = f"Soccer game at Let's Play Soccer\nField {game['field']}\n{game['home_team']} vs {game['away_team']}"
+        event.description = f"Field {game['field']}\nSoccer game at Let's Play Soccer\n{game['home_team']} vs {game['away_team']}\nGLHF!"
+
+        if game['home_team'] in special_teams or game['away_team'] in special_teams:
+            event.name = f"Special Event: {game['home_team']} vs {game['away_team']}"
+            event.description = f"Field {game['field']}\nSoccer game at Let's Play Soccer\n{game['home_team']} vs {game['away_team']}\nAhhh shit, here we go again..."
         
         cal.events.add(event)
     
@@ -241,7 +267,7 @@ def lambda_handler(event, context):
         dict: Lambda response with appropriate status code and body
     """
     # Add version identifier for logging
-    print(f"Soccer Schedule API Version: 2025-03-02-v5")
+    print(f"Soccer Schedule API Version: 2025-03-03-v6")
     
     query_params = event.get('queryStringParameters', {}) or {}  # Handle None case
     action = query_params.get('action', 'fetch')
@@ -402,7 +428,7 @@ def lambda_handler(event, context):
                 'headers': {
                     'Content-Type': 'text/calendar',
                     'Access-Control-Allow-Origin': '*',
-                    'Content-Disposition': 'attachment; filename="soccer_schedule.ics"'
+                    'Content-Disposition': 'attachment; filename="soccer_schedule_{season}.ics"'
                 },
                 'body': calendar_text
             }
