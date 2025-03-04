@@ -167,13 +167,13 @@ def get_team_schedule_from_api(team_id):
 
 def create_calendar_events(selected_games):
     """
-    Create an ICS calendar file from a list of games.
+    Create an ICS calendar file from a list of games with proper Mountain Time zone.
     
     Args:
         selected_games (list): List of game dictionaries
         
     Returns:
-        str: ICS calendar content as a string
+        str: ICS calendar content as a string with proper timezone handling
     """
     cal = Calendar()
     mt_offset = -7
@@ -181,43 +181,17 @@ def create_calendar_events(selected_games):
     
     # Add calendar metadata
     cal.creator = 'Soccer Schedule API'
-
-    # # Determine the season year based on the first game
-    # current_date = datetime.now()
-    # current_year = current_date.year
-    
-    # # Sort games by date_str if available, otherwise by parsed date string
-    # if selected_games and 'date_str' in selected_games[0]:
-    #     sorted_games = sorted(selected_games, key=lambda x: x['date_str'])
-    # else:
-    #     # Fallback to string parsing if date_str isn't available
-    #     sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
-    
-    # # Year determination logic remains for backward compatibility
-    # if sorted_games:
-    #     if 'date_str' in sorted_games[0]:
-    #         first_game = datetime.fromisoformat(sorted_games[0]['date_str'])
-    #     else:
-    #         first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
-    #         first_game = first_game.replace(year=current_year)
-        
-    #     # If first game is more than a week in the past, use next year
-    #     one_week_ago = current_date - timedelta(days=7)
-    #     if first_game < one_week_ago:
-    #         current_year += 1
     
     for game in selected_games:
         event = Event()
         
-        # Convert the game date string to a datetime object
-        # if:
+        # Convert the game date string to a datetime object with explicit Mountain Time zone
         game_datetime = datetime.fromisoformat(game['date_str'])
-        # else:
-        #     # Fallback for backward compatibility
-        #     date_str = game['date']
-        #     game_datetime = datetime.strptime(f"{date_str} {current_year}", "%a %m/%d %I:%M %p %Y")
-        #     game_datetime = game_datetime.replace(tzinfo=tz)
-
+        
+        # Ensure the datetime has Mountain Time timezone info
+        if game_datetime.tzinfo is None:
+            game_datetime = game_datetime.replace(tzinfo=tz)
+        
         # List of special teams
         special_teams = ['MIXED BAG FC', 'LOOKING TO SCORE', 'NO BUENO O30', 'EYE CANDY']
 
@@ -236,19 +210,8 @@ def create_calendar_events(selected_games):
     # Serialize the calendar to get the basic structure
     ics_content = cal.serialize()
     
-    # Inject proper VALARM components for each VEVENT
-    # Find all VEVENT blocks and add a VALARM with 40-minute reminder to each
-    pattern = r'(END:VEVENT)'
-    valarm_block = """
-BEGIN:VALARM
-ACTION:DISPLAY
-DESCRIPTION:Reminder: Soccer game starting soon
-TRIGGER:-PT40M
-END:VALARM
-"""
-    # Insert the VALARM block before each END:VEVENT
-    ics_content = re.sub(pattern, f"{valarm_block}\\1", ics_content)
-    # Add this before returning the ics_content
+    # Fix timezone issues by replacing UTC timestamps with Mountain Time
+    # 1. Add the timezone definition
     timezone_block = """
 BEGIN:VTIMEZONE
 TZID:America/Denver
@@ -266,9 +229,29 @@ RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
 END:DAYLIGHT
 END:VTIMEZONE
 """
-
-    # Find where to insert the timezone block (after BEGIN:VCALENDAR)
+    
+    # Insert the timezone block after BEGIN:VCALENDAR
     ics_content = ics_content.replace("BEGIN:VCALENDAR", f"BEGIN:VCALENDAR\n{timezone_block}")
+    
+    # 2. Replace UTC timestamps with Mountain Time
+    # This pattern matches DTSTART with UTC time (Z suffix)
+    pattern_dt = r'DTSTART:(\d{8}T\d{6})Z'
+    
+    # Replace with TZID parameter format
+    replacement_dt = r'DTSTART;TZID=America/Denver:\1'
+    ics_content = re.sub(pattern_dt, replacement_dt, ics_content)
+    
+    # 3. Add VALARM components for reminders
+    pattern_valarm = r'(END:VEVENT)'
+    valarm_block = """
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Reminder: Soccer game starting soon
+TRIGGER:-PT40M
+END:VALARM
+"""
+    ics_content = re.sub(pattern_valarm, f"{valarm_block}\\1", ics_content)
+    
     return ics_content
 
 def lambda_handler(event, context):
