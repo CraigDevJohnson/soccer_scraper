@@ -135,18 +135,18 @@ def get_team_schedule_from_api(team_id):
             try:
                 game_date = datetime.fromisoformat(game_datetime.replace("Z", "-07:00"))
                 
-                # Convert to local time (assuming MT timezone for consistency)
-                game_date = game_date.astimezone(tz)
-                
                 # Format the date as it was in the original scraper
                 formatted_date = game_date.strftime("%a %m/%d %I:%M %p")
                 
+                # Convert to string with timezone info for passing to ICS
+                game_date = game_date.isoformat()
+
                 # Only show future games (may add an option to include past games)
                 if game_date >= current_date:
                     all_games.append({
                         'game_id': game_id,
                         'date': formatted_date,
-                        'datetime_obj': game_date,
+                        'date_str': game_date,
                         'field': field,
                         'home_team': home_team,
                         'away_team': away_team
@@ -186,17 +186,17 @@ def create_calendar_events(selected_games):
     current_date = datetime.now()
     current_year = current_date.year
     
-    # Sort games by datetime_obj if available, otherwise by parsed date string
-    if selected_games and 'datetime_obj' in selected_games[0]:
-        sorted_games = sorted(selected_games, key=lambda x: x['datetime_obj'])
+    # Sort games by date_str if available, otherwise by parsed date string
+    if selected_games and 'date_str' in selected_games[0]:
+        sorted_games = sorted(selected_games, key=lambda x: x['date_str'])
     else:
-        # Fallback to string parsing if datetime_obj isn't available
+        # Fallback to string parsing if date_str isn't available
         sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
     
     # Year determination logic remains for backward compatibility
     if sorted_games:
-        if 'datetime_obj' in sorted_games[0]:
-            first_game = sorted_games[0]['datetime_obj']
+        if 'date_str' in sorted_games[0]:
+            first_game = sorted_games[0]['date_str']
         else:
             first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
             first_game = first_game.replace(year=current_year)
@@ -210,8 +210,8 @@ def create_calendar_events(selected_games):
         event = Event()
         
         # Use the datetime object if available, otherwise parse from string
-        if 'datetime_obj' in game:
-            game_datetime = game['datetime_obj']
+        if 'date_str' in game:
+            game_datetime = game['date_str']
         else:
             # Fallback for backward compatibility
             date_str = game['date']
