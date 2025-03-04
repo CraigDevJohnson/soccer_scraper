@@ -133,7 +133,7 @@ def get_team_schedule_from_api(team_id):
             
             # Parse the game datetime from ISO format
             try:
-                game_date = datetime.fromisoformat(game_datetime.replace("Z", "07:00"))
+                game_date = datetime.fromisoformat(game_datetime.replace("Z", "-07:00"))
                 
                 # Convert to local time (assuming MT timezone for consistency)
                 game_date = game_date.astimezone(tz)
