@@ -182,29 +182,29 @@ def create_calendar_events(selected_games):
     # Add calendar metadata
     cal.creator = 'Soccer Schedule API'
 
-    # Determine the season year based on the first game
-    current_date = datetime.now()
-    current_year = current_date.year
+    # # Determine the season year based on the first game
+    # current_date = datetime.now()
+    # current_year = current_date.year
     
-    # Sort games by date_str if available, otherwise by parsed date string
-    if selected_games and 'date_str' in selected_games[0]:
-        sorted_games = sorted(selected_games, key=lambda x: x['date_str'])
-    else:
-        # Fallback to string parsing if date_str isn't available
-        sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
+    # # Sort games by date_str if available, otherwise by parsed date string
+    # if selected_games and 'date_str' in selected_games[0]:
+    #     sorted_games = sorted(selected_games, key=lambda x: x['date_str'])
+    # else:
+    #     # Fallback to string parsing if date_str isn't available
+    #     sorted_games = sorted(selected_games, key=lambda x: datetime.strptime(x['date'], "%a %m/%d %I:%M %p"))
     
-    # Year determination logic remains for backward compatibility
-    if sorted_games:
-        if 'date_str' in sorted_games[0]:
-            first_game = datetime.fromisoformat(sorted_games[0]['date_str'])
-        else:
-            first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
-            first_game = first_game.replace(year=current_year)
+    # # Year determination logic remains for backward compatibility
+    # if sorted_games:
+    #     if 'date_str' in sorted_games[0]:
+    #         first_game = datetime.fromisoformat(sorted_games[0]['date_str'])
+    #     else:
+    #         first_game = datetime.strptime(sorted_games[0]['date'], "%a %m/%d %I:%M %p")
+    #         first_game = first_game.replace(year=current_year)
         
-        # If first game is more than a week in the past, use next year
-        one_week_ago = current_date - timedelta(days=7)
-        if first_game < one_week_ago:
-            current_year += 1
+    #     # If first game is more than a week in the past, use next year
+    #     one_week_ago = current_date - timedelta(days=7)
+    #     if first_game < one_week_ago:
+    #         current_year += 1
     
     for game in selected_games:
         event = Event()
@@ -212,11 +212,11 @@ def create_calendar_events(selected_games):
         # Convert the game date string to a datetime object
         if 'date_str' in game:
             game_datetime = datetime.fromisoformat(game['date_str'])
-        else:
-            # Fallback for backward compatibility
-            date_str = game['date']
-            game_datetime = datetime.strptime(f"{date_str} {current_year}", "%a %m/%d %I:%M %p %Y")
-            game_datetime = game_datetime.replace(tzinfo=tz)
+        # else:
+        #     # Fallback for backward compatibility
+        #     date_str = game['date']
+        #     game_datetime = datetime.strptime(f"{date_str} {current_year}", "%a %m/%d %I:%M %p %Y")
+        #     game_datetime = game_datetime.replace(tzinfo=tz)
 
         # List of special teams
         special_teams = ['MIXED BAG FC', 'LOOKING TO SCORE', 'NO BUENO O30', 'EYE CANDY']
