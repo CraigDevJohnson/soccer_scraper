@@ -9,7 +9,7 @@ This project contains scripts to scrape and process soccer/football data from va
 ## Local Installation
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-lambda.txt
 ```
 
 ## Usage
