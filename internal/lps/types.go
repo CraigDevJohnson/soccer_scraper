@@ -30,7 +30,8 @@ type GameData struct {
 	GameID string `json:"game_id"`
 
 	// SchedGameDateTime is the scheduled game time in ISO 8601 format.
-	// May include 'Z' suffix for UTC or explicit timezone offset.
+	// NOTE: Despite the 'Z' suffix, the API returns times in local Mountain Time
+	// (America/Denver), NOT UTC. The 'Z' suffix is incorrectly applied by the API.
 	SchedGameDateTime string `json:"SchedGameDateTime"`
 
 	// FieldName is the human-readable field name (e.g., "Field 1").

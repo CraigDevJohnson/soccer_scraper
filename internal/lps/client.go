@@ -236,24 +236,32 @@ func (c *Client) parseGames(apiGames []GameData) ([]ParsedGame, error) {
 	return games, nil
 }
 
-// parseGameTime parses an API datetime string and converts it to Mountain Time.
-// The API returns times in UTC with 'Z' suffix - we parse correctly and convert
-// to America/Denver for proper wall clock time (including DST handling).
+// parseGameTime parses an API datetime string and interprets it as Mountain Time.
+// IMPORTANT: Despite the 'Z' suffix in the API response, the times are actually
+// in local Mountain Time (America/Denver), NOT UTC. The API incorrectly formats
+// local times with a 'Z' suffix. We strip any timezone info and interpret the
+// time values directly as Mountain Time to get correct wall clock times.
 func (c *Client) parseGameTime(dateStr string) (time.Time, error) {
-	// Try parsing as RFC3339 first (handles both 'Z' and offset formats)
-	t, err := time.Parse(time.RFC3339, dateStr)
-	if err != nil {
-		// Try without timezone suffix as fallback
-		t, err = time.Parse("2006-01-02T15:04:05", dateStr)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("unable to parse datetime: %s", dateStr)
-		}
-		// Assume UTC if no timezone info
-		t = t.UTC()
+	// Strip the 'Z' suffix if present - the API incorrectly uses 'Z' for local times
+	dateStr = strings.TrimSuffix(dateStr, "Z")
+
+	// Also strip any timezone offset suffix (e.g., "+00:00", "-07:00")
+	// We only want the local time portion: "2006-01-02T15:04:05"
+	if idx := strings.LastIndex(dateStr, "+"); idx > 10 {
+		dateStr = dateStr[:idx]
+	} else if idx := strings.LastIndex(dateStr, "-"); idx > 10 {
+		dateStr = dateStr[:idx]
 	}
 
-	// Convert to Mountain Time for proper wall clock display
-	return t.In(c.location), nil
+	// Parse the time without timezone - these are the raw local time values
+	t, err := time.Parse("2006-01-02T15:04:05", dateStr)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("unable to parse datetime: %s", dateStr)
+	}
+
+	// Interpret the parsed time as Mountain Time (the API's actual timezone)
+	// time.Date creates a new time in the specified location with the same clock values
+	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), 0, c.location), nil
 }
 
 // FetchMultipleTeams fetches schedules for multiple team IDs concurrently.
