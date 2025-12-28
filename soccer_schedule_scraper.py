@@ -95,7 +95,7 @@ def subscribe_email_to_topic(email, team_ids):
                 'subscription_arn': subscription_arn,
                 'created_at': datetime.now(timezone.utc).isoformat(),
                 'updated_at': datetime.now(timezone.utc).isoformat(),
-                'ttl': int((datetime.now() + timedelta(days=90)).timestamp())
+                'ttl': int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp())
             }
         )
         
@@ -181,8 +181,8 @@ def store_schedule_in_dynamodb(team_id, games):
         
         # Store each game
         for game in games:
-            # TTL set to 90 days from now
-            ttl = int((datetime.now() + timedelta(days=90)).timestamp())
+            # TTL set to 90 days from now (use UTC for consistent timestamps)
+            ttl = int((datetime.now(timezone.utc) + timedelta(days=90)).timestamp())
             
             table.put_item(
                 Item={
@@ -379,11 +379,12 @@ def check_schedules_for_changes():
                 # Get current schedule
                 current_games, season = get_team_schedule_from_api(team_id)
                 
-                # Add IDs to games
+                # Add IDs to games using ISO datetime for stability
                 for game in current_games:
                     game['team_id'] = team_id
                     game['season'] = season
-                    game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
+                    # Use ISO datetime for stable ID generation instead of formatted date
+                    game['id'] = f"{season}_{game.get('game_datetime_iso', game['date'])}_{game['home_team']}_{game['away_team']}_{game['field']}"
                 
                 # Get stored schedule
                 stored_schedule = get_stored_schedule_from_dynamodb(team_id)
@@ -518,7 +519,8 @@ def get_team_schedule_from_api(team_id):
                         'date': formatted_date,
                         'field': field,
                         'home_team': home_team,
-                        'away_team': away_team
+                        'away_team': away_team,
+                        'game_datetime_iso': game_datetime  # Store ISO datetime for stable ID generation
                     })
             except ValueError as e:
                 print(f"Warning: Error parsing date for game: {game_datetime} - {e}")
@@ -667,7 +669,8 @@ def lambda_handler(event, context):
                     for game in games:
                         game['team_id'] = team_id
                         game['season'] = season
-                        game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
+                        # Use ISO datetime for stable ID generation instead of formatted date
+                        game['id'] = f"{season}_{game.get('game_datetime_iso', game['date'])}_{game['home_team']}_{game['away_team']}_{game['field']}"
                         all_games.append(game)
                 except Exception as e:
                     failed_teams.append({

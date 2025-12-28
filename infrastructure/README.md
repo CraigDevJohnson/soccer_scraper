@@ -133,6 +133,22 @@ curl -X POST "https://your-lambda-url?action=unsubscribe&email=user@example.com"
 - Lambda function logs are retained for 7 days only
 - Point-in-time recovery enabled on DynamoDB
 
+**Important Security Note**: The Lambda function URL is publicly accessible without authentication. This is intentional for ease of use but means:
+- Anyone with the URL can subscribe/unsubscribe emails (requires email confirmation via SNS)
+- Consider implementing API Gateway with authentication for production use
+- Monitor CloudWatch Logs for suspicious activity
+- Consider implementing rate limiting via AWS WAF if abuse occurs
+
+For production environments, we recommend:
+1. Using API Gateway with API keys or JWT authentication
+2. Implementing rate limiting with AWS WAF
+3. Adding request validation and sanitization
+4. Monitoring subscription patterns for abuse
+- DynamoDB table uses server-side encryption
+- IAM roles follow least-privilege principle
+- Lambda function logs are retained for 7 days only
+- Point-in-time recovery enabled on DynamoDB
+
 ## Maintenance
 
 ### Updating Infrastructure
