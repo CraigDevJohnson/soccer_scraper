@@ -1,56 +1,88 @@
 # Soccer Scraper
 
-A Python script for scraping soccer-related data, deployable as AWS Lambda function.
+A Go application that fetches soccer schedules from the LPS (Let's Play Soccer) API and generates ICS calendar files. Runs as both an AWS Lambda function and a local CLI.
 
-## Description
+## Architecture
 
-This project contains scripts to scrape and process soccer/football data from various sources. The data can be used for analysis, statistics, or other soccer-related applications.
+**Package structure:**
 
-## Local Installation
+- `cmd/lambda/` - AWS Lambda entrypoint (API Gateway HTTP API v2)
+- `cmd/scraper/` - Local CLI using urfave/cli
+- `internal/app/` - Core handler logic, request routing, response formatting
+- `internal/lps/` - LPS API client with concurrent fetching
+- `internal/calendar/` - ICS generation with proper VTIMEZONE handling
+- `internal/validate/` - Team ID validation (6-digit format)
+- `internal/types/` - Shared types to avoid import cycles
+
+## Build
+
+### Local CLI Build
 
 ```bash
-pip install -r requirements.txt
+go build -o bin/scraper.exe ./cmd/scraper
 ```
+
+### AWS Lambda Build (ARM64 for Graviton2)
+
+```bash
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap ./cmd/lambda
+```
+
+Lambda requirements:
+
+- Runtime: `provided.al2023`
+- Architecture: `arm64`
+- Binary name: `bootstrap`
 
 ## Usage
 
-### Local Usage
+### CLI Usage
 
-```python
-python soccer_schedule_scraper.py
+```bash
+# Fetch games as JSON
+./bin/scraper.exe fetch -t 469306
+
+# Fetch with JSON output for debugging
+./bin/scraper.exe fetch -t 469306 --json
+
+# Download and save ICS file
+./bin/scraper.exe download -t 469306 -o schedule.ics
 ```
 
-### AWS Lambda Usage
+### AWS Lambda / API Gateway
 
-The script can be deployed as an AWS Lambda function. Call the function with:
+**Fetch (GET with query params):**
 
-```json
-{
-    "team_ids": ["123456", "654321"]
-}
-```
+- `?action=fetch&team_ids=123456,654321`
+- Returns JSON with `games`, `processed_team_ids`, `failed_teams`, `invalid_team_ids`
+
+**Download (POST with JSON body):**
+
+- `?action=download` + body: `{"games": [...]}`
+- Returns `text/calendar` ICS file
 
 ## Deployment
 
 ### AWS Lambda Deployment
 
 1. Set up GitHub repository secrets:
-   - AWS_ACCESS_KEY_ID
-   - AWS_SECRET_ACCESS_KEY
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
 
 2. Push to main branch to trigger automatic deployment, or manually trigger the workflow in GitHub Actions.
 
 ## Features
 
-- Data scraping from soccer websites
-- Data processing and cleaning
-- Calendar export functionality
-- AWS Lambda support with GitHub Actions deployment
+- Fetches soccer schedules from LPS API
+- Concurrent team fetching with bounded concurrency (8 parallel requests)
+- ICS calendar generation with proper VTIMEZONE (America/Denver) and DST handling
+- Team ID validation (6-digit format)
+- Dual deployment: AWS Lambda and local CLI
 
 ## Dependencies
 
-- Python 3.9+
-- Required packages listed in requirements-lambda.txt
+- Go 1.21+
+- See `go.mod` for module dependencies
 
 ## License
 

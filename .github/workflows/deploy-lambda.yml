@@ -2,7 +2,7 @@ name: Deploy Lambda
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,23 +13,24 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: '3.9'
+          go-version: "1.22"
+          cache: true
 
-      - name: Install dependencies
+      - name: Build Lambda Binary
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-lambda.txt -t ./package
+          # Build for Linux/ARM64 (Lambda provided.al2023 with Graviton2 - cheaper)
+          # Output binary must be named 'bootstrap' for provided.al2023 runtime
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap ./cmd/lambda
 
       - name: Package Lambda
         run: |
-          cp soccer_schedule_scraper.py ./package/
-          cd package
-          zip -r ../function.zip .
+          # Create deployment zip with the bootstrap binary
+          zip function.zip bootstrap
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
