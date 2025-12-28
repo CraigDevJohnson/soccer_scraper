@@ -13,10 +13,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
@@ -32,7 +32,7 @@ jobs:
           zip -r ../function.zip .
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -40,4 +40,25 @@ jobs:
 
       - name: Deploy to Lambda
         run: |
-          aws lambda update-function-code --function-name soccer_schedule_scraper --zip-file fileb://function.zip
+          # Update Lambda function code
+          aws lambda update-function-code \
+            --function-name soccer_schedule_scraper \
+            --zip-file fileb://function.zip
+          
+          # Wait for update to complete
+          aws lambda wait function-updated \
+            --function-name soccer_schedule_scraper
+          
+          # Get infrastructure outputs
+          SNS_TOPIC_ARN=$(aws sns list-topics --query "Topics[?contains(TopicArn, 'soccer_schedule_changes')].TopicArn" --output text)
+          DYNAMODB_TABLE=$(aws dynamodb list-tables --query "TableNames[?contains(@, 'soccer_schedules')]" --output text)
+          
+          # Update environment variables if infrastructure exists
+          if [ ! -z "$SNS_TOPIC_ARN" ] && [ ! -z "$DYNAMODB_TABLE" ]; then
+            echo "Updating Lambda environment variables..."
+            aws lambda update-function-configuration \
+              --function-name soccer_schedule_scraper \
+              --environment "Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN,DYNAMODB_TABLE=$DYNAMODB_TABLE,ENVIRONMENT=prod}"
+          else
+            echo "Infrastructure not deployed. Skipping environment variable update."
+          fi

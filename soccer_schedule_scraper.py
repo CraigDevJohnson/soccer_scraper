@@ -8,16 +8,31 @@ import os
 import boto3
 from decimal import Decimal
 
-# AWS clients initialization
-sns_client = boto3.client('sns')
-dynamodb = boto3.resource('dynamodb')
+# AWS clients initialization (lazy-loaded)
+_sns_client = None
+_dynamodb = None
 
 # Environment variables
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN', '')
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'soccer_schedules')
 
+def get_sns_client():
+    """Get SNS client (lazy initialization)."""
+    global _sns_client
+    if _sns_client is None:
+        _sns_client = boto3.client('sns')
+    return _sns_client
+
+def get_dynamodb_resource():
+    """Get DynamoDB resource (lazy initialization)."""
+    global _dynamodb
+    if _dynamodb is None:
+        _dynamodb = boto3.resource('dynamodb')
+    return _dynamodb
+
 def get_dynamodb_table():
     """Get DynamoDB table reference."""
+    dynamodb = get_dynamodb_resource()
     return dynamodb.Table(DYNAMODB_TABLE_NAME)
 
 def subscribe_email_to_topic(email, team_ids):
@@ -37,7 +52,8 @@ def subscribe_email_to_topic(email, team_ids):
             raise ValueError(f"Invalid email format: {email}")
         
         # Check if already subscribed
-        response = sns_client.list_subscriptions_by_topic(TopicArn=SNS_TOPIC_ARN)
+        sns = get_sns_client()
+        response = sns.list_subscriptions_by_topic(TopicArn=SNS_TOPIC_ARN)
         for sub in response.get('Subscriptions', []):
             if sub.get('Endpoint') == email and sub.get('Protocol') == 'email':
                 # Update team_ids in DynamoDB for existing subscription
@@ -60,7 +76,7 @@ def subscribe_email_to_topic(email, team_ids):
                 }
         
         # Subscribe to SNS topic
-        response = sns_client.subscribe(
+        response = sns.subscribe(
             TopicArn=SNS_TOPIC_ARN,
             Protocol='email',
             Endpoint=email
@@ -106,7 +122,8 @@ def unsubscribe_email_from_topic(email):
     """
     try:
         # Find subscription ARN for this email
-        response = sns_client.list_subscriptions_by_topic(TopicArn=SNS_TOPIC_ARN)
+        sns = get_sns_client()
+        response = sns.list_subscriptions_by_topic(TopicArn=SNS_TOPIC_ARN)
         
         subscription_arn = None
         for sub in response.get('Subscriptions', []):
@@ -130,7 +147,7 @@ def unsubscribe_email_from_topic(email):
             }
         
         # Unsubscribe from SNS
-        sns_client.unsubscribe(SubscriptionArn=subscription_arn)
+        sns.unsubscribe(SubscriptionArn=subscription_arn)
         
         # Remove from DynamoDB
         table = get_dynamodb_table()
@@ -307,7 +324,8 @@ def send_schedule_change_notification(team_id, changes):
         message = "\n".join(message_lines)
         
         # Send notification
-        response = sns_client.publish(
+        sns = get_sns_client()
+        response = sns.publish(
             TopicArn=SNS_TOPIC_ARN,
             Subject=f"Soccer Schedule Update - Team {team_id}",
             Message=message
