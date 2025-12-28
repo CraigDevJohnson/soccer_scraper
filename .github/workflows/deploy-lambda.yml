@@ -18,7 +18,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          # Use the Go version declared in go.mod to avoid version mismatches between
+          # local builds, CI, and deployment. This also helps catch invalid versions
+          # early, since actions/setup-go will fail fast if go.mod specifies one.
+          go-version-file: "go.mod"
           cache: true
 
       - name: Build Lambda Binary

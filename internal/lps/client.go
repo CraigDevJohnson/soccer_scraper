@@ -100,10 +100,10 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// Classify the error type for better client feedback
-		if ctx.Err() == context.DeadlineExceeded {
-			result.Error = fmt.Errorf("request timed out while fetching schedule for team %s. Please try again", teamID)
+		if strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "timeout") {
+			result.Error = fmt.Errorf("request timed out while fetching schedule for team %s; please try again", teamID)
 		} else if strings.Contains(err.Error(), "connection") {
-			result.Error = fmt.Errorf("connection error while fetching schedule for team %s. Please check your internet connection", teamID)
+			result.Error = fmt.Errorf("connection error while fetching schedule for team %s; please check your internet connection", teamID)
 		} else {
 			result.Error = fmt.Errorf("could not fetch any schedule, make sure team ID is accurate")
 		}
@@ -129,7 +129,7 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 
 	// Validate response structure - check for team data
 	if apiResp.Team.TeamName == "" {
-		result.Error = fmt.Errorf("Team ID %s not found. Please verify the team code is correct", teamID)
+		result.Error = fmt.Errorf("team ID %s not found, please verify the team code is correct", teamID)
 		result.ErrorType = "ValueError"
 		return result
 	}

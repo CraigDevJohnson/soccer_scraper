@@ -88,11 +88,3 @@ type DownloadRequest struct {
 	// Games is the list of games to include in the calendar file.
 	Games []Game `json:"games"`
 }
-
-// CORS headers that should be included in all API responses.
-// These allow cross-origin requests from the portfolio website.
-var CORSHeaders = map[string]string{
-	"Access-Control-Allow-Origin":  "*",
-	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-	"Access-Control-Allow-Headers": "Content-Type",
-}

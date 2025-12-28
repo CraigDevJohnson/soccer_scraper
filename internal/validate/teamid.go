@@ -28,21 +28,21 @@ func ValidateTeamID(teamID string) error {
 	// Trim whitespace and check for empty string
 	trimmed := strings.TrimSpace(teamID)
 	if trimmed == "" {
-		return fmt.Errorf("Team ID cannot be empty")
+		return fmt.Errorf("team ID cannot be empty")
 	}
 
-	// Check format: exactly 6 digits
+	// Check for 6-digit format
 	if !teamIDPattern.MatchString(trimmed) {
-		return fmt.Errorf("Team ID '%s' must be exactly 6 digits", teamID)
+		return fmt.Errorf("team ID '%s' must be exactly 6 digits", trimmed)
 	}
 
 	// Verify it's a positive integer (handles edge cases like all zeros)
 	numID, err := strconv.Atoi(trimmed)
 	if err != nil {
-		return fmt.Errorf("Team ID '%s' must be a valid number", teamID)
+		return fmt.Errorf("team ID '%s' must be a valid number", trimmed)
 	}
 	if numID <= 0 {
-		return fmt.Errorf("Team ID '%s' must be a positive number", teamID)
+		return fmt.Errorf("team ID '%s' must be a positive number", trimmed)
 	}
 
 	return nil
