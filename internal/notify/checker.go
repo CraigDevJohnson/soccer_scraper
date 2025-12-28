@@ -285,7 +285,9 @@ func (c *Checker) CheckAndNotify(ctx context.Context, teamID string) (bool, erro
 		// Update stored schedule with new last checked time
 		stored.LastChecked = time.Now()
 		stored.Games = storage.ConvertGamesToStoredGames(currentGames)
-		_ = c.storageClient.SaveSchedule(ctx, stored)
+		if err := c.storageClient.SaveSchedule(ctx, stored); err != nil {
+			log.Printf("Warning: failed to update stored schedule for team %s: %v", teamID, err)
+		}
 		return false, nil
 	}
 

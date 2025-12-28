@@ -26,6 +26,10 @@ const (
 	// DefaultTTLDays is the default number of days to retain schedule data.
 	// Set to 90 days to cover an 8-week season with buffer.
 	DefaultTTLDays = 90
+
+	// DefaultTTLDuration is the default duration to retain schedule data.
+	// Calculated from DefaultTTLDays for cleaner time calculations.
+	DefaultTTLDuration = DefaultTTLDays * 24 * time.Hour
 )
 
 // Client handles DynamoDB operations for schedule storage.
@@ -112,9 +116,9 @@ type StoredGame struct {
 // Returns:
 //   - error: Any error during storage
 func (c *Client) SaveSchedule(ctx context.Context, schedule *StoredSchedule) error {
-	// Set TTL to DefaultTTLDays from now if not already set
+	// Set TTL to DefaultTTLDuration from now if not already set
 	if schedule.TTL == 0 {
-		schedule.TTL = time.Now().Add(time.Duration(DefaultTTLDays) * 24 * time.Hour).Unix()
+		schedule.TTL = time.Now().Add(DefaultTTLDuration).Unix()
 	}
 
 	// Set last checked time

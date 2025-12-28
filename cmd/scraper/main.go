@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/mail"
 	"os"
 	"strings"
 
@@ -296,11 +297,14 @@ func subscribeAction(c *cli.Context) error {
 		return fmt.Errorf("invalid team ID: %w", err)
 	}
 
-	// Validate email (basic format check)
+	// Validate email using net/mail.ParseAddress (RFC 5322 compliant)
 	email := c.String("email")
-	if !strings.Contains(email, "@") || !strings.Contains(email, ".") {
-		return fmt.Errorf("invalid email format: %s", email)
+	parsedEmail, err := mail.ParseAddress(email)
+	if err != nil {
+		return fmt.Errorf("invalid email format '%s': %w", email, err)
 	}
+	// Use the parsed address (handles cases like "Name <email@example.com>")
+	email = parsedEmail.Address
 
 	fmt.Printf("\nSubscribing %s to schedule updates for team %s...\n", email, teamIDParam)
 
