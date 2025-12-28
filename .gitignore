@@ -3,3 +3,13 @@
 *.json
 *.pyc
 admin/
+
+# OpenTofu/Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+backend.tfvars
+*.tfplan
+infrastructure/lambda_placeholder.zip

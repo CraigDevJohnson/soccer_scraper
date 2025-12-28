@@ -4,6 +4,400 @@ from ics import Calendar, Event
 from datetime import datetime, timedelta, timezone
 import re
 import json
+import os
+import boto3
+from decimal import Decimal
+
+# AWS clients initialization
+sns_client = boto3.client('sns')
+dynamodb = boto3.resource('dynamodb')
+
+# Environment variables
+SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN', '')
+DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE', 'soccer_schedules')
+
+def get_dynamodb_table():
+    """Get DynamoDB table reference."""
+    return dynamodb.Table(DYNAMODB_TABLE_NAME)
+
+def subscribe_email_to_topic(email, team_ids):
+    """
+    Subscribe an email address to SNS topic for schedule change notifications.
+    
+    Args:
+        email: Email address to subscribe
+        team_ids: List of team IDs to monitor
+        
+    Returns:
+        dict: Subscription details including subscription ARN
+    """
+    try:
+        # Validate email format
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            raise ValueError(f"Invalid email format: {email}")
+        
+        # Check if already subscribed
+        response = sns_client.list_subscriptions_by_topic(TopicArn=SNS_TOPIC_ARN)
+        for sub in response.get('Subscriptions', []):
+            if sub.get('Endpoint') == email and sub.get('Protocol') == 'email':
+                # Update team_ids in DynamoDB for existing subscription
+                table = get_dynamodb_table()
+                table.put_item(
+                    Item={
+                        'team_id': f'subscription#{email}',
+                        'game_id': 'metadata',
+                        'monitored_teams': team_ids,
+                        'email': email,
+                        'subscription_arn': sub.get('SubscriptionArn'),
+                        'updated_at': datetime.now(timezone.utc).isoformat()
+                    }
+                )
+                return {
+                    'status': 'already_subscribed',
+                    'email': email,
+                    'subscription_arn': sub.get('SubscriptionArn'),
+                    'message': 'Email already subscribed. Updated monitored teams.'
+                }
+        
+        # Subscribe to SNS topic
+        response = sns_client.subscribe(
+            TopicArn=SNS_TOPIC_ARN,
+            Protocol='email',
+            Endpoint=email
+        )
+        
+        subscription_arn = response.get('SubscriptionArn', 'pending confirmation')
+        
+        # Store subscription info in DynamoDB
+        table = get_dynamodb_table()
+        table.put_item(
+            Item={
+                'team_id': f'subscription#{email}',
+                'game_id': 'metadata',
+                'monitored_teams': team_ids,
+                'email': email,
+                'subscription_arn': subscription_arn,
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+                'ttl': int((datetime.now() + timedelta(days=90)).timestamp())
+            }
+        )
+        
+        return {
+            'status': 'subscribed',
+            'email': email,
+            'subscription_arn': subscription_arn,
+            'message': 'Subscription created. Please check your email to confirm.'
+        }
+        
+    except Exception as e:
+        print(f"Error subscribing email {email}: {str(e)}")
+        raise
+
+def unsubscribe_email_from_topic(email):
+    """
+    Unsubscribe an email address from SNS topic.
+    
+    Args:
+        email: Email address to unsubscribe
+        
+    Returns:
+        dict: Unsubscription status
+    """
+    try:
+        # Find subscription ARN for this email
+        response = sns_client.list_subscriptions_by_topic(TopicArn=SNS_TOPIC_ARN)
+        
+        subscription_arn = None
+        for sub in response.get('Subscriptions', []):
+            if sub.get('Endpoint') == email and sub.get('Protocol') == 'email':
+                subscription_arn = sub.get('SubscriptionArn')
+                break
+        
+        if not subscription_arn or subscription_arn == 'PendingConfirmation':
+            # Remove from DynamoDB even if not confirmed
+            table = get_dynamodb_table()
+            table.delete_item(
+                Key={
+                    'team_id': f'subscription#{email}',
+                    'game_id': 'metadata'
+                }
+            )
+            return {
+                'status': 'not_found',
+                'email': email,
+                'message': 'No active subscription found for this email.'
+            }
+        
+        # Unsubscribe from SNS
+        sns_client.unsubscribe(SubscriptionArn=subscription_arn)
+        
+        # Remove from DynamoDB
+        table = get_dynamodb_table()
+        table.delete_item(
+            Key={
+                'team_id': f'subscription#{email}',
+                'game_id': 'metadata'
+            }
+        )
+        
+        return {
+            'status': 'unsubscribed',
+            'email': email,
+            'message': 'Successfully unsubscribed from notifications.'
+        }
+        
+    except Exception as e:
+        print(f"Error unsubscribing email {email}: {str(e)}")
+        raise
+
+def store_schedule_in_dynamodb(team_id, games):
+    """
+    Store game schedule in DynamoDB for future comparison.
+    
+    Args:
+        team_id: Team ID
+        games: List of game dictionaries
+    """
+    try:
+        table = get_dynamodb_table()
+        
+        # Store each game
+        for game in games:
+            # TTL set to 90 days from now
+            ttl = int((datetime.now() + timedelta(days=90)).timestamp())
+            
+            table.put_item(
+                Item={
+                    'team_id': team_id,
+                    'game_id': game['id'],
+                    'date': game['date'],
+                    'field': game['field'],
+                    'home_team': game['home_team'],
+                    'away_team': game['away_team'],
+                    'season': game.get('season', 'Unknown'),
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                    'ttl': ttl
+                }
+            )
+        
+        print(f"Stored {len(games)} games for team {team_id} in DynamoDB")
+        
+    except Exception as e:
+        print(f"Error storing schedule in DynamoDB: {str(e)}")
+        raise
+
+def get_stored_schedule_from_dynamodb(team_id):
+    """
+    Retrieve stored schedule from DynamoDB.
+    
+    Args:
+        team_id: Team ID
+        
+    Returns:
+        dict: Dictionary of game_id -> game data
+    """
+    try:
+        table = get_dynamodb_table()
+        
+        response = table.query(
+            KeyConditionExpression='team_id = :tid',
+            ExpressionAttributeValues={
+                ':tid': team_id
+            }
+        )
+        
+        # Convert to dictionary keyed by game_id
+        stored_games = {}
+        for item in response.get('Items', []):
+            game_id = item.get('game_id')
+            # Skip subscription metadata
+            if game_id == 'metadata':
+                continue
+            stored_games[game_id] = item
+        
+        return stored_games
+        
+    except Exception as e:
+        print(f"Error retrieving schedule from DynamoDB: {str(e)}")
+        return {}
+
+def compare_schedules(old_schedule, new_schedule):
+    """
+    Compare old and new schedules to detect changes.
+    
+    Args:
+        old_schedule: Dictionary of game_id -> game data (from DynamoDB)
+        new_schedule: List of new game dictionaries
+        
+    Returns:
+        dict: Changes detected (added, removed, modified games)
+    """
+    changes = {
+        'added': [],
+        'removed': [],
+        'modified': []
+    }
+    
+    # Convert new schedule to dictionary for easier comparison
+    new_games_dict = {game['id']: game for game in new_schedule}
+    
+    # Check for added and modified games
+    for game_id, new_game in new_games_dict.items():
+        if game_id not in old_schedule:
+            changes['added'].append(new_game)
+        else:
+            old_game = old_schedule[game_id]
+            # Compare key fields
+            if (old_game.get('date') != new_game.get('date') or
+                old_game.get('field') != new_game.get('field') or
+                old_game.get('home_team') != new_game.get('home_team') or
+                old_game.get('away_team') != new_game.get('away_team')):
+                changes['modified'].append({
+                    'old': old_game,
+                    'new': new_game
+                })
+    
+    # Check for removed games
+    for game_id in old_schedule:
+        if game_id not in new_games_dict:
+            changes['removed'].append(old_schedule[game_id])
+    
+    return changes
+
+def send_schedule_change_notification(team_id, changes):
+    """
+    Send SNS notification about schedule changes.
+    
+    Args:
+        team_id: Team ID
+        changes: Dictionary of changes (from compare_schedules)
+    """
+    try:
+        # Build notification message
+        message_lines = [f"Schedule changes detected for team {team_id}:\n"]
+        
+        if changes['added']:
+            message_lines.append("\n🆕 NEW GAMES:")
+            for game in changes['added']:
+                message_lines.append(
+                    f"  • {game['date']} - Field {game['field']}: "
+                    f"{game['home_team']} vs {game['away_team']}"
+                )
+        
+        if changes['modified']:
+            message_lines.append("\n📝 MODIFIED GAMES:")
+            for change in changes['modified']:
+                old = change['old']
+                new = change['new']
+                message_lines.append(f"  Game: {new['home_team']} vs {new['away_team']}")
+                if old.get('date') != new.get('date'):
+                    message_lines.append(f"    Date: {old.get('date')} → {new.get('date')}")
+                if old.get('field') != new.get('field'):
+                    message_lines.append(f"    Field: {old.get('field')} → {new.get('field')}")
+        
+        if changes['removed']:
+            message_lines.append("\n❌ CANCELLED GAMES:")
+            for game in changes['removed']:
+                message_lines.append(
+                    f"  • {game['date']} - Field {game['field']}: "
+                    f"{game['home_team']} vs {game['away_team']}"
+                )
+        
+        message = "\n".join(message_lines)
+        
+        # Send notification
+        response = sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=f"Soccer Schedule Update - Team {team_id}",
+            Message=message
+        )
+        
+        print(f"Sent schedule change notification for team {team_id}")
+        return response
+        
+    except Exception as e:
+        print(f"Error sending notification: {str(e)}")
+        raise
+
+def check_schedules_for_changes():
+    """
+    Check all monitored team schedules for changes.
+    Called periodically by EventBridge.
+    
+    Returns:
+        dict: Summary of checks performed
+    """
+    try:
+        # Get all subscriptions from DynamoDB
+        table = get_dynamodb_table()
+        response = table.scan(
+            FilterExpression='begins_with(team_id, :prefix)',
+            ExpressionAttributeValues={
+                ':prefix': 'subscription#'
+            }
+        )
+        
+        subscriptions = response.get('Items', [])
+        print(f"Found {len(subscriptions)} active subscriptions")
+        
+        results = {
+            'checked_teams': [],
+            'changes_detected': [],
+            'errors': []
+        }
+        
+        # Get unique team IDs from all subscriptions
+        all_team_ids = set()
+        for sub in subscriptions:
+            monitored_teams = sub.get('monitored_teams', [])
+            all_team_ids.update(monitored_teams)
+        
+        print(f"Checking {len(all_team_ids)} unique teams")
+        
+        # Check each team for changes
+        for team_id in all_team_ids:
+            try:
+                # Get current schedule
+                current_games, season = get_team_schedule_from_api(team_id)
+                
+                # Add IDs to games
+                for game in current_games:
+                    game['team_id'] = team_id
+                    game['season'] = season
+                    game['id'] = f"{season}_{game['date']}_{game['home_team']}_{game['away_team']}_{game['field']}"
+                
+                # Get stored schedule
+                stored_schedule = get_stored_schedule_from_dynamodb(team_id)
+                
+                # Compare schedules
+                if stored_schedule:
+                    changes = compare_schedules(stored_schedule, current_games)
+                    
+                    # Send notification if changes detected
+                    if changes['added'] or changes['modified'] or changes['removed']:
+                        send_schedule_change_notification(team_id, changes)
+                        results['changes_detected'].append({
+                            'team_id': team_id,
+                            'changes': changes
+                        })
+                
+                # Store current schedule
+                store_schedule_in_dynamodb(team_id, current_games)
+                results['checked_teams'].append(team_id)
+                
+            except Exception as e:
+                print(f"Error checking team {team_id}: {str(e)}")
+                results['errors'].append({
+                    'team_id': team_id,
+                    'error': str(e)
+                })
+        
+        return results
+        
+    except Exception as e:
+        print(f"Error in check_schedules_for_changes: {str(e)}")
+        raise
 
 def validate_team_id(team_id: str) -> bool:
     """Validate that a team ID is properly formatted."""
@@ -343,7 +737,7 @@ def lambda_handler(event, context):
             }
             
         except Exception as e:
-            print(f"Error generating calendar: {str(e)}")  # Add logging
+            print(f"Error generating calendar: {str(e)}")
             return {
                 'statusCode': 500,
                 'headers': {
@@ -355,27 +749,157 @@ def lambda_handler(event, context):
                     'errorType': e.__class__.__name__
                 })
             }
-
-    return {
-        'statusCode': 400,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps({'error': 'Invalid action'})
-    }
-    print(f"Error generating calendar: {str(e)}")  # Add logging
-    return {
-        'statusCode': 500,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps({
-            'error': f'Failed to generate calendar: {str(e)}',
-            'errorType': e.__class__.__name__
-        })
-    }
+    
+    elif action == 'subscribe':
+        try:
+            email = query_params.get('email')
+            team_ids_param = query_params.get('team_ids')
+            
+            if not email:
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'error': 'Email address is required',
+                        'errorType': 'ValidationError'
+                    })
+                }
+            
+            if not team_ids_param:
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'error': 'Team IDs are required',
+                        'errorType': 'ValidationError'
+                    })
+                }
+            
+            # Parse team IDs
+            team_ids = [tid.strip() for tid in team_ids_param.split(',') if tid.strip()]
+            
+            # Validate team IDs
+            for team_id in team_ids:
+                try:
+                    validate_team_id(team_id)
+                except ValueError as e:
+                    return {
+                        'statusCode': 400,
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'Access-Control-Allow-Origin': '*'
+                        },
+                        'body': json.dumps({
+                            'error': str(e),
+                            'errorType': 'ValidationError'
+                        })
+                    }
+            
+            # Subscribe email
+            result = subscribe_email_to_topic(email, team_ids)
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps(result)
+            }
+            
+        except Exception as e:
+            print(f"Error subscribing email: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': f'Failed to subscribe: {str(e)}',
+                    'errorType': e.__class__.__name__
+                })
+            }
+    
+    elif action == 'unsubscribe':
+        try:
+            email = query_params.get('email')
+            
+            if not email:
+                return {
+                    'statusCode': 400,
+                    'headers': {
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*'
+                    },
+                    'body': json.dumps({
+                        'error': 'Email address is required',
+                        'errorType': 'ValidationError'
+                    })
+                }
+            
+            # Unsubscribe email
+            result = unsubscribe_email_from_topic(email)
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps(result)
+            }
+            
+        except Exception as e:
+            print(f"Error unsubscribing email: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': f'Failed to unsubscribe: {str(e)}',
+                    'errorType': e.__class__.__name__
+                })
+            }
+    
+    elif action == 'check_schedules':
+        # This action is called by EventBridge to check for schedule changes
+        try:
+            results = check_schedules_for_changes()
+            
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'message': 'Schedule check completed',
+                    'results': results
+                })
+            }
+            
+        except Exception as e:
+            print(f"Error checking schedules: {str(e)}")
+            return {
+                'statusCode': 500,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': '*'
+                },
+                'body': json.dumps({
+                    'error': f'Failed to check schedules: {str(e)}',
+                    'errorType': e.__class__.__name__
+                })
+            }
 
     return {
         'statusCode': 400,

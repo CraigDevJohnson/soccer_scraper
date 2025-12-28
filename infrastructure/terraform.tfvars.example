@@ -1,0 +1,25 @@
+# Example Terraform Variables File
+# Copy this file to terraform.tfvars and customize the values
+
+# AWS Region
+aws_region = "us-west-2"
+
+# Environment (dev, staging, or prod)
+environment = "prod"
+
+# Lambda function name
+lambda_function_name = "soccer_schedule_scraper"
+
+# DynamoDB table name
+schedule_table_name = "soccer_schedules"
+
+# SNS topic name
+sns_topic_name = "soccer_schedule_changes"
+
+# How often to check for schedule changes (in minutes)
+# Recommended: 60 minutes for cost optimization
+schedule_check_frequency = 60
+
+# Enable automated schedule checking
+# Set to false to disable EventBridge scheduled checks
+enable_scheduled_checks = true
