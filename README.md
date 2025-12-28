@@ -1,6 +1,6 @@
 # Soccer Scraper
 
-A Go application that fetches soccer schedules from the LPS (Let's Play Soccer) API and generates ICS calendar files. Runs as both an AWS Lambda function and a local CLI.
+A Go application that fetches soccer schedules from the LPS (Let's Play Soccer) API and generates ICS calendar files. Runs as both an AWS Lambda function and a local CLI. Now includes email notification support for schedule changes.
 
 ## Architecture
 
@@ -13,6 +13,9 @@ A Go application that fetches soccer schedules from the LPS (Let's Play Soccer) 
 - `internal/calendar/` - ICS generation with proper VTIMEZONE handling
 - `internal/validate/` - Team ID validation (6-digit format)
 - `internal/types/` - Shared types to avoid import cycles
+- `internal/sns/` - AWS SNS topic management for email notifications
+- `internal/storage/` - DynamoDB schedule persistence with TTL
+- `internal/notify/` - Schedule comparison and change detection
 
 ## Build
 
@@ -47,7 +50,35 @@ Lambda requirements:
 
 # Download and save ICS file
 ./bin/scraper.exe download -t 469306 -o schedule.ics
+
+# Subscribe to email notifications for schedule changes
+./bin/scraper.exe subscribe -t 469306 -e your-email@example.com
+
+# Check for schedule changes (runs once, for scheduled jobs)
+./bin/scraper.exe check-changes
+
+# Check a specific team for changes
+./bin/scraper.exe check-changes -t 469306
 ```
+
+### Email Notifications
+
+The subscribe command sets up email notifications for schedule changes:
+
+1. **Subscribe**: Run `subscribe -t TEAMID -e EMAIL` to register for notifications
+2. **Confirm**: Check your email and click the confirmation link from AWS SNS
+3. **Receive Updates**: Get notified when games are added, removed, or rescheduled
+
+**What triggers notifications:**
+- New games added to the schedule
+- Games cancelled or removed
+- Game time changes
+- Field changes
+
+**Schedule storage:**
+- Schedules are stored in DynamoDB with a 90-day TTL (covers 8-week season + buffer)
+- The `check-changes` command compares current API data with stored schedules
+- Run `check-changes` on a schedule (e.g., daily via cron or CloudWatch Events)
 
 ### AWS Lambda / API Gateway
 
@@ -71,6 +102,45 @@ Lambda requirements:
 
 2. Push to main branch to trigger automatic deployment, or manually trigger the workflow in GitHub Actions.
 
+### AWS Infrastructure for Email Notifications
+
+The email notification feature requires the following AWS resources:
+
+1. **DynamoDB Table**: `soccer-schedules`
+   - Partition key: `team_id` (String)
+   - TTL attribute: `ttl` (enabled)
+
+2. **SNS Topics**: Created automatically with prefix `soccer-schedule-`
+   - Topics are created per team when users subscribe
+
+3. **IAM Permissions** (for Lambda or CLI):
+   ```json
+   {
+     "Effect": "Allow",
+     "Action": [
+       "dynamodb:PutItem",
+       "dynamodb:GetItem",
+       "dynamodb:DeleteItem",
+       "dynamodb:Scan"
+     ],
+     "Resource": "arn:aws:dynamodb:*:*:table/soccer-schedules"
+   },
+   {
+     "Effect": "Allow",
+     "Action": [
+       "sns:CreateTopic",
+       "sns:Subscribe",
+       "sns:Publish",
+       "sns:ListSubscriptionsByTopic"
+     ],
+     "Resource": "arn:aws:sns:*:*:soccer-schedule-*"
+   }
+   ```
+
+4. **Scheduled Check** (optional but recommended):
+   - Set up a CloudWatch Events rule to invoke the Lambda with `check-changes` action daily
+   - Or use a cron job if running the CLI locally
+
 ## Features
 
 - Fetches soccer schedules from LPS API
@@ -78,6 +148,11 @@ Lambda requirements:
 - ICS calendar generation with proper VTIMEZONE (America/Denver) and DST handling
 - Team ID validation (6-digit format)
 - Dual deployment: AWS Lambda and local CLI
+- **Email notifications for schedule changes:**
+  - Subscribe to teams via SNS topics
+  - Automatic change detection comparing stored vs current schedules
+  - Notifications for added, removed, and updated games
+  - 90-day TTL for schedule data (covers 8-week seasons)
 
 ## Dependencies
 
