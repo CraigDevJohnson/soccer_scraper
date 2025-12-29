@@ -48,12 +48,19 @@ var timezoneMutex sync.Mutex
 // initMountainTime loads the America/Denver timezone if not already loaded.
 // Returns an error if the timezone cannot be loaded. This function is safe
 // to call concurrently and will retry loading on each call if previous attempts
-// failed, allowing recovery from transient errors.
+// failed, allowing recovery from transient errors. Uses double-checked locking
+// for optimal performance.
 func initMountainTime() error {
+	// Fast path: check if already loaded without locking (reads are safe)
+	if MountainTime != nil {
+		return nil
+	}
+
+	// Slow path: acquire lock and check again before loading
 	timezoneMutex.Lock()
 	defer timezoneMutex.Unlock()
 
-	// If already successfully loaded, reuse it
+	// Double-check: another goroutine may have initialized while we waited for lock
 	if MountainTime != nil {
 		return nil
 	}
