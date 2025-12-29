@@ -214,7 +214,7 @@ All times use `America/Denver` (Mountain Time). The ICS output includes a full V
 - Schedule comparison in `internal/notify/checker.go`
 - DynamoDB operations in `internal/storage/dynamodb.go`
 - SNS operations in `internal/sns/client.go`
-- All packages follow bounded concurrency patterns with `errgroup`
+- Checker in `internal/notify/` uses bounded concurrency with `errgroup` for parallel team checks
 
 **Test AWS integrations locally:**
 - Set AWS credentials via environment variables or `~/.aws/credentials`
