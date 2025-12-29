@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,6 +35,20 @@ const (
 	MaxConcurrentRequests = 8
 )
 
+// MountainTime is the America/Denver timezone for proper time handling.
+// It is initialized during package init for reuse across the application.
+var MountainTime *time.Location
+
+func init() {
+	var err error
+	MountainTime, err = time.LoadLocation("America/Denver")
+	if err != nil {
+		// This should not happen with embedded tzdata, but we panic if it does
+		// as correct timezone handling is critical for game scheduling.
+		panic(fmt.Errorf("failed to load America/Denver timezone: %w", err))
+	}
+}
+
 // Client handles HTTP requests to the LPS API with proper timeout and
 // connection pooling. It should be reused across requests for efficiency.
 type Client struct {
@@ -46,17 +61,8 @@ type Client struct {
 
 // NewClient creates a new LPS API client with configured timeouts and
 // the America/Denver timezone loaded for proper game time handling.
-//
-// Returns an error if the timezone cannot be loaded (should not happen
-// with embedded tzdata, but handled defensively).
 func NewClient() (*Client, error) {
-	// Load America/Denver timezone for proper Mountain Time handling
-	loc, err := time.LoadLocation("America/Denver")
-	if err != nil {
-		return nil, fmt.Errorf("failed to load America/Denver timezone: %w", err)
-	}
-
-	// Create HTTP client with timeout and connection pooling
+	// Create an HTTP client with timeout and connection pooling
 	httpClient := &http.Client{
 		Timeout: RequestTimeout,
 		Transport: &http.Transport{
@@ -68,7 +74,7 @@ func NewClient() (*Client, error) {
 
 	return &Client{
 		httpClient: httpClient,
-		location:   loc,
+		location:   MountainTime,
 	}, nil
 }
 
@@ -88,7 +94,7 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 	// Build the API URL for this team
 	url := fmt.Sprintf("%s/%s", BaseURL, teamID)
 
-	// Create request with context for timeout/cancellation
+	// Create a request with context for timeout/cancellation
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to create request: %w", err)
@@ -110,7 +116,12 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 		result.ErrorType = "RuntimeError"
 		return result
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	// Check for non-2xx status codes
 	if resp.StatusCode != http.StatusOK {
@@ -217,8 +228,8 @@ func (c *Client) parseGames(apiGames []GameData) ([]ParsedGame, error) {
 			continue
 		}
 
-		// Format date for display (matches Python: "Sat 01/15 07:00 PM")
-		formattedDate := gameTime.Format("Mon 01/02 03:04 PM")
+		// Format date for display
+		formattedDate := gameTime.Format("Mon 01/02/25 03:04 PM")
 
 		// ISO format for calendar generation
 		isoDate := gameTime.Format(time.RFC3339)
@@ -309,23 +320,9 @@ func (c *Client) FetchMultipleTeams(ctx context.Context, teamIDs []string) ([]ty
 				return nil
 			}
 
-			// Convert ParsedGames to types.Game and add to results
-			for _, pg := range result.Games {
-				game := types.Game{
-					GameID:   pg.GameID,
-					Date:     pg.FormattedDate,
-					DateStr:  pg.ISODate,
-					Field:    pg.Field,
-					HomeTeam: pg.HomeTeam,
-					AwayTeam: pg.AwayTeam,
-					TeamID:   teamID,
-					Season:   result.Season,
-					TeamName: result.TeamName,
-					// Generate composite ID for deduplication
-					ID: fmt.Sprintf("%s_%s_%s_%s_%s", result.Season, pg.FormattedDate, pg.HomeTeam, pg.AwayTeam, pg.Field),
-				}
-				allGames = append(allGames, game)
-			}
+			// Convert ParsedGames to types.Game using the shared helper function
+			games := ConvertParsedGamesToTypesGames(result.Games, teamID, result.TeamName, result.Season)
+			allGames = append(allGames, games...)
 
 			return nil
 		})

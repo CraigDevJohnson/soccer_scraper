@@ -39,3 +39,4 @@ go.work.sum
 *.json
 admin/
 __pycache__/
+.idea

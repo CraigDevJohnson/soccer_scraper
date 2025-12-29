@@ -17,14 +17,14 @@ import (
 // Team IDs from the LPS API are always 6-digit numeric strings.
 var teamIDPattern = regexp.MustCompile(`^\d{6}$`)
 
-// ValidateTeamID checks if a team ID string is properly formatted.
+// TeamID checks if a team ID string is properly formatted.
 // A valid team ID must be:
 //   - A non-empty string
 //   - Exactly 6 digits
 //   - A positive integer when parsed
 //
 // Returns nil if valid, or an error with a descriptive message if invalid.
-func ValidateTeamID(teamID string) error {
+func TeamID(teamID string) error {
 	// Trim whitespace and check for empty string
 	trimmed := strings.TrimSpace(teamID)
 	if trimmed == "" {
@@ -99,7 +99,7 @@ func ParseTeamIDsCSV(input string) (valid []string, invalid []types.InvalidTeamI
 		}
 
 		// Validate the team ID format
-		if err := ValidateTeamID(teamID); err != nil {
+		if err := TeamID(teamID); err != nil {
 			invalid = append(invalid, types.InvalidTeamID{
 				ID:     teamID,
 				Reason: err.Error(),
@@ -107,7 +107,7 @@ func ParseTeamIDsCSV(input string) (valid []string, invalid []types.InvalidTeamI
 			continue
 		}
 
-		// Mark as seen and add to valid list
+		// Mark as seen and add to a valid list
 		seen[teamID] = true
 		valid = append(valid, teamID)
 	}

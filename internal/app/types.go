@@ -65,7 +65,7 @@ type ErrorResponse struct {
 	// ErrorType classifies the error (e.g., "ValidationError", "RuntimeError").
 	ErrorType string `json:"errorType"`
 
-	// ProcessedTeamIDs lists team IDs that were attempted before the error.
+	// ProcessedTeamIDs lists team IDs attempted before the error.
 	// Only present for partial failure scenarios.
 	ProcessedTeamIDs []string `json:"processed_team_ids,omitempty"`
 

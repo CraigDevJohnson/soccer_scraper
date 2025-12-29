@@ -5,6 +5,8 @@ package lps
 // the API responses into internal game structures.
 
 import (
+	"fmt"
+
 	"github.com/CraigDevJohnson/soccer_scraper/internal/types"
 )
 
@@ -35,14 +37,14 @@ type GameData struct {
 
 	// SchedGameDateTime is the scheduled game time in ISO 8601 format.
 	// NOTE: Despite the 'Z' suffix, the API returns times in local Mountain Time
-	// (America/Denver), NOT UTC. The 'Z' suffix is incorrectly applied by the API.
+	// (America/Denver), NOT UTC. The API incorrectly applies the 'Z' suffix.
 	SchedGameDateTime string `json:"SchedGameDateTime"`
 
 	// FieldName is the human-readable field name (e.g., "Field 1").
 	// This takes precedence over the Field number if present.
 	FieldName string `json:"field_name"`
 
-	// Field is the numeric field identifier, used as fallback if FieldName is empty.
+	// Field is the numeric field identifier, used as a fallback if FieldName is empty.
 	Field int `json:"Field"`
 
 	// HomeTeam contains information about the home team for this game.
@@ -87,7 +89,7 @@ type ParsedGame struct {
 	// GameID is the unique game identifier from the API.
 	GameID string
 
-	// FormattedDate is the display date (e.g., "Sat 01/15 07:00 PM").
+	// FormattedDate is the display date (e.g., "Sat 01/15/25 07:00 PM").
 	FormattedDate string
 
 	// ISODate is the ISO 8601 datetime string for calendar generation.
@@ -109,18 +111,26 @@ type ParsedGame struct {
 //
 // Parameters:
 //   - games: Slice of ParsedGame structs from the LPS client
+//   - teamID: The team ID that was queried
+//   - teamName: The team name from the API response
+//   - season: The season identifier from the API response
 //
 // Returns:
 //   - []types.Game: Slice of Game structs for use in comparison and storage
-func ConvertParsedGamesToTypesGames(games []ParsedGame) []types.Game {
+func ConvertParsedGamesToTypesGames(games []ParsedGame, teamID, teamName, season string) []types.Game {
 	result := make([]types.Game, len(games))
 	for i, pg := range games {
 		result[i] = types.Game{
 			GameID:   pg.GameID,
+			ID:       fmt.Sprintf("%s_%s_%s_%s_%s", season, pg.FormattedDate, pg.HomeTeam, pg.AwayTeam, pg.Field),
+			Date:     pg.FormattedDate,
 			DateStr:  pg.ISODate,
 			Field:    pg.Field,
 			HomeTeam: pg.HomeTeam,
 			AwayTeam: pg.AwayTeam,
+			TeamID:   teamID,
+			Season:   season,
+			TeamName: teamName,
 		}
 	}
 	return result
