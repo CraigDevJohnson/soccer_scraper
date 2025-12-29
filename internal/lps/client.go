@@ -34,12 +34,11 @@ const (
 	MaxConcurrentRequests = 8
 )
 
-// MountainTime is the America/Denver timezone for proper time handling.
+// mountainTime is the America/Denver timezone for proper time handling.
 // It is lazily initialized on first call to initMountainTime and cached for reuse.
-// This variable is exported so other packages (e.g., notify) can access it.
-// Consumers must ensure NewClient() has been called successfully before accessing
-// this variable, as it will be nil until initialization succeeds.
-var MountainTime *time.Location
+// This variable is private; use GetMountainTime() to access it, which ensures
+// proper initialization.
+var mountainTime *time.Location
 
 // timezoneMutex protects timezone initialization to allow retries on failure
 // while preventing race conditions during concurrent initialization attempts.
@@ -52,7 +51,7 @@ var timezoneMutex sync.Mutex
 // for optimal performance.
 func initMountainTime() error {
 	// Fast path: check if already loaded without locking (reads are safe)
-	if MountainTime != nil {
+	if mountainTime != nil {
 		return nil
 	}
 
@@ -61,7 +60,7 @@ func initMountainTime() error {
 	defer timezoneMutex.Unlock()
 
 	// Double-check: another goroutine may have initialized while we waited for lock
-	if MountainTime != nil {
+	if mountainTime != nil {
 		return nil
 	}
 
@@ -71,8 +70,21 @@ func initMountainTime() error {
 		return fmt.Errorf("failed to load America/Denver timezone: %w", err)
 	}
 
-	MountainTime = loc
+	mountainTime = loc
 	return nil
+}
+
+// GetMountainTime returns the America/Denver timezone location.
+// It ensures the timezone is initialized before returning it.
+// This function will panic if timezone initialization fails, which should
+// never happen with embedded tzdata. The panic is acceptable because timezone
+// initialization failure is a programming error, not a runtime condition.
+func GetMountainTime() *time.Location {
+	if err := initMountainTime(); err != nil {
+		// This should never happen with embedded tzdata
+		panic(fmt.Sprintf("failed to initialize Mountain Time timezone: %v", err))
+	}
+	return mountainTime
 }
 
 // Client handles HTTP requests to the LPS API with proper timeout and
@@ -107,7 +119,7 @@ func NewClient() (*Client, error) {
 
 	return &Client{
 		httpClient: httpClient,
-		location:   MountainTime,
+		location:   mountainTime,
 	}, nil
 }
 
