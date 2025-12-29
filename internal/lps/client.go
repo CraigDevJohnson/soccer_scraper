@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -117,9 +118,8 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 		return result
 	}
 	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-
+		if err := Body.Close(); err != nil {
+			log.Printf("Error closing response body for team %s: %v", teamID, err)
 		}
 	}(resp.Body)
 
