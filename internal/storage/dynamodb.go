@@ -186,7 +186,7 @@ func (c *Client) ensureTableExists(ctx context.Context) error {
 
 // enableTTL enables Time To Live (TTL) on the 'ttl' attribute.
 // This allows DynamoDB to automatically delete expired items.
-// Checks if TTL is already enabled to avoid unnecessary API calls.
+// Checks if TTL is already enabled or being enabled to avoid unnecessary API calls.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -204,11 +204,17 @@ func (c *Client) enableTTL(ctx context.Context) error {
 		return fmt.Errorf("failed to describe TTL: %w", err)
 	}
 
-	// Check if TTL is already enabled
-	if ttlDesc.TimeToLiveDescription != nil &&
-		ttlDesc.TimeToLiveDescription.TimeToLiveStatus == types.TimeToLiveStatusEnabled {
-		log.Printf("TTL is already enabled on table '%s'", c.tableName)
-		return nil
+	// Check if TTL is already enabled or being enabled
+	if ttlDesc.TimeToLiveDescription != nil {
+		status := ttlDesc.TimeToLiveDescription.TimeToLiveStatus
+		if status == types.TimeToLiveStatusEnabled {
+			log.Printf("TTL is already enabled on table '%s'", c.tableName)
+			return nil
+		}
+		if status == types.TimeToLiveStatusEnabling {
+			log.Printf("TTL is already being enabled on table '%s'", c.tableName)
+			return nil
+		}
 	}
 
 	// TTL is not enabled, enable it now
