@@ -15,7 +15,7 @@ type Game struct {
 	// Generated during fetch to allow clients to identify unique games.
 	ID string `json:"id"`
 
-	// Date is the human-readable formatted date string (e.g., "Wed 01/15 07:00 PM").
+	// Date is the human-readable formatted date string (e.g., "Wed 01/15/25 07:00 PM").
 	// Used for display purposes in the UI.
 	Date string `json:"date"`
 
