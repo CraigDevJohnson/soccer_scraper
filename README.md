@@ -92,6 +92,13 @@ The subscribe command sets up email notifications for schedule changes:
 - `?action=download` + body: `{"games": [...]}`
 - Returns `text/calendar` ICS file
 
+**Subscribe (GET with query params):**
+
+- `?action=subscribe&team_id=123456&email=user@example.com`
+- Returns JSON with subscription details: `{"success": true, "message": "...", "team_id": "...", "team_name": "...", "email": "...", "subscription_arn": "...", "topic_arn": "..."}`
+- Subscribes the email address to schedule change notifications for the specified team
+- User must confirm the subscription via the email sent by AWS SNS
+
 ## Deployment
 
 ### AWS Lambda Deployment

@@ -2,7 +2,7 @@ package app
 
 // Package app provides the core application handler logic for the soccer
 // schedule scraper. It routes incoming requests to the appropriate action
-// (fetch or download) and formats responses.
+// (fetch, download, or subscribe) and formats responses.
 
 import (
 	"context"
@@ -10,31 +10,44 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/mail"
+	"strings"
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/calendar"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
+	"github.com/CraigDevJohnson/soccer_scraper/internal/sns"
+	"github.com/CraigDevJohnson/soccer_scraper/internal/storage"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/validate"
 	"github.com/aws/aws-lambda-go/events"
 )
 
 // Handler processes incoming API Gateway requests and routes them to the
-// appropriate action handler. It maintains references to the LPS client
-// and calendar generator for reuse across invocations.
+// appropriate action handler. It maintains references to the LPS client,
+// calendar generator, SNS client, and storage client for reuse across invocations.
 type Handler struct {
 	// lpsClient is the HTTP client for LPS API requests.
 	lpsClient *lps.Client
 
 	// icsGenerator creates ICS calendar files from game data.
 	icsGenerator *calendar.Generator
+
+	// snsClient handles SNS topic and subscription operations.
+	snsClient *sns.Client
+
+	// storageClient handles DynamoDB operations for schedule persistence.
+	storageClient *storage.Client
 }
 
-// NewHandler creates a new Handler with an initialized LPS client and ICS generator.
+// NewHandler creates a new Handler with initialized clients and generators.
 // This should be called once during Lambda cold start and reused across invocations.
 //
-// Returns an error if the LPS client or ICS generator fails to initialize
-// (typically due to timezone loading issues, which should not happen with
-// embedded tzdata).
+// Returns an error if any of the clients fail to initialize (typically due to
+// AWS configuration or timezone loading issues, which should not happen with
+// embedded tzdata and proper IAM roles).
 func NewHandler() (*Handler, error) {
+	// Use background context for client initialization during cold start
+	ctx := context.Background()
+
 	// Initialize LPS API client
 	lpsClient, err := lps.NewClient()
 	if err != nil {
@@ -47,9 +60,23 @@ func NewHandler() (*Handler, error) {
 		return nil, fmt.Errorf("failed to create ICS generator: %w", err)
 	}
 
+	// Initialize SNS client for notification management
+	snsClient, err := sns.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SNS client: %w", err)
+	}
+
+	// Initialize storage client for DynamoDB operations
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage client: %w", err)
+	}
+
 	return &Handler{
-		lpsClient:    lpsClient,
-		icsGenerator: icsGen,
+		lpsClient:     lpsClient,
+		icsGenerator:  icsGen,
+		snsClient:     snsClient,
+		storageClient: storageClient,
 	}, nil
 }
 
@@ -57,6 +84,7 @@ func NewHandler() (*Handler, error) {
 // It routes based on the 'action' query parameter:
 //   - 'fetch' (default): Retrieve game schedules for specified team IDs
 //   - 'download': Generate an ICS calendar file from provided games
+//   - 'subscribe': Subscribe an email address to schedule change notifications
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -80,6 +108,8 @@ func (h *Handler) HandleRequest(ctx context.Context, request events.APIGatewayV2
 		return h.handleFetch(ctx, request)
 	case ActionDownload:
 		return h.handleDownload(ctx, request)
+	case ActionSubscribe:
+		return h.handleSubscribe(ctx, request)
 	default:
 		return h.errorResponse(400, "Invalid action", "ValidationError", nil, nil, nil)
 	}
@@ -247,4 +277,145 @@ func (h *Handler) validationErrorResponse(invalidTeamIDs []InvalidTeamID, valida
 	}
 
 	return h.jsonResponse(400, errResp)
+}
+
+// handleSubscribe processes the 'subscribe' action to register email notifications for a team.
+// It validates the team ID and email, fetches the current schedule, creates an SNS topic,
+// subscribes the email, and stores the schedule in DynamoDB for future comparison.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - request: The API Gateway v2 HTTP request event
+//
+// Returns:
+//   - events.APIGatewayV2HTTPResponse: The HTTP response with subscription details or error
+func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
+	// Get team_id from query parameters
+	teamID := request.QueryStringParameters["team_id"]
+	if teamID == "" {
+		return h.errorResponse(400,
+			"Team ID is required. Please provide a valid 6-digit team ID.",
+			"ValidationError", nil, nil, nil)
+	}
+
+	// Validate team ID
+	if err := validate.TeamID(teamID); err != nil {
+		return h.errorResponse(400,
+			fmt.Sprintf("Invalid team ID '%s': %v", teamID, err),
+			"ValidationError", nil, nil, nil)
+	}
+
+	// Get email from query parameters
+	email := request.QueryStringParameters["email"]
+	if email == "" {
+		return h.errorResponse(400,
+			"Email address is required.",
+			"ValidationError", nil, nil, nil)
+	}
+
+	// Validate email using net/mail.ParseAddress (RFC 5322 compliant)
+	parsedEmail, err := mail.ParseAddress(email)
+	if err != nil {
+		return h.errorResponse(400,
+			fmt.Sprintf("Invalid email format '%s': %v", email, err),
+			"ValidationError", nil, nil, nil)
+	}
+	// Use the parsed address (handles cases like "Name <email@example.com>")
+	email = parsedEmail.Address
+
+	// Extract email domain for logging (avoid logging full email for privacy)
+	emailDomain := "unknown"
+	if atIndex := strings.LastIndex(email, "@"); atIndex != -1 && atIndex < len(email)-1 {
+		emailDomain = email[atIndex+1:]
+	}
+
+	log.Printf("Processing subscription request for team %s, email domain %s", teamID, emailDomain)
+
+	// Fetch current schedule from LPS API
+	result := h.lpsClient.FetchTeamSchedule(ctx, teamID)
+	if result.Error != nil {
+		log.Printf("Failed to fetch schedule for team %s: %v", teamID, result.Error)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to fetch schedule: %v", result.Error),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	log.Printf("Fetched %d games for team %s (%s)", len(result.Games), teamID, result.TeamName)
+
+	// Create or get the SNS topic for this team using pre-initialized client
+	topicArn, err := h.snsClient.GetOrCreateTopic(ctx, teamID)
+	if err != nil {
+		log.Printf("Failed to create/get SNS topic for team %s: %v", teamID, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to create notification topic: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Check for existing subscriptions to avoid duplicates
+	existingSubscriptions, err := h.snsClient.ListSubscriptions(ctx, topicArn)
+	if err != nil {
+		log.Printf("Warning: Failed to list existing subscriptions for topic %s: %v", topicArn, err)
+		// Continue anyway - we'll let SNS handle it
+	} else {
+		// Check if this email is already subscribed
+		for _, sub := range existingSubscriptions {
+			if sub.Protocol == "email" && sub.Endpoint == email {
+				log.Printf("Email domain %s already subscribed to team %s", emailDomain, teamID)
+				// Return success with existing subscription info
+				return h.jsonResponse(200, SubscribeResponse{
+					Success:         true,
+					Message:         "This email is already subscribed to notifications for this team.",
+					TeamID:          teamID,
+					TeamName:        result.TeamName,
+					Email:           email,
+					SubscriptionArn: sub.SubscriptionArn,
+					TopicArn:        topicArn,
+				})
+			}
+		}
+	}
+
+	// Subscribe email to the topic
+	subArn, err := h.snsClient.SubscribeEmail(ctx, topicArn, email)
+	if err != nil {
+		log.Printf("Failed to subscribe email domain %s to topic %s: %v", emailDomain, topicArn, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to subscribe email: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Convert games to stored format using the shared helper functions
+	typesGames := lps.ConvertParsedGamesToTypesGames(result.Games, teamID, result.TeamName, result.Season)
+	games := storage.ConvertGamesToStoredGames(typesGames)
+
+	// Save schedule for future comparison using pre-initialized client
+	schedule := &storage.StoredSchedule{
+		TeamID:   teamID,
+		TeamName: result.TeamName,
+		Season:   result.Season,
+		Games:    games,
+		TopicArn: topicArn,
+	}
+	err = h.storageClient.SaveSchedule(ctx, schedule)
+	if err != nil {
+		log.Printf("Failed to save schedule for team %s: %v", teamID, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to save schedule: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	log.Printf("Subscription successful for team %s, email domain %s", teamID, emailDomain)
+
+	// Return success response
+	response := SubscribeResponse{
+		Success:         true,
+		Message:         "Subscription successful. Please check your email to confirm the subscription.",
+		TeamID:          teamID,
+		TeamName:        result.TeamName,
+		Email:           email,
+		SubscriptionArn: subArn,
+		TopicArn:        topicArn,
+	}
+
+	return h.jsonResponse(200, response)
 }
