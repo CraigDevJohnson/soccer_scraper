@@ -263,19 +263,22 @@ func formatGameLine(g storage.StoredGame) string {
 
 // formatDateTime formats an ISO datetime string for display in Mountain Time.
 // The output includes the timezone abbreviation (MST or MDT) for clarity.
-// If MountainTime is not initialized, it falls back to UTC formatting.
 func formatDateTime(isoDate string) string {
 	t, err := time.Parse(time.RFC3339, isoDate)
 	if err != nil {
 		return isoDate // Return as-is if parsing fails
 	}
 
-	// Use the shared Mountain Time location from the LPS package if available
+	// Use the shared Mountain Time location from the LPS package.
+	// This nil check is defensive programming - in production with embedded tzdata,
+	// MountainTime should always be initialized by the time this is called (after
+	// NewClient succeeds). The check exists only to prevent panics during development
+	// or testing scenarios where initialization order might be incorrect.
 	if lps.MountainTime != nil {
 		return t.In(lps.MountainTime).Format("Mon Jan 2 at 3:04 PM MST")
 	}
 
-	// Fallback to UTC if MountainTime is not initialized (should not happen in normal operation)
+	// Fallback to UTC if MountainTime is not initialized (development/testing only)
 	return t.UTC().Format("Mon Jan 2 at 3:04 PM (UTC)")
 }
 

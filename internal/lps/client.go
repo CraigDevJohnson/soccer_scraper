@@ -35,34 +35,37 @@ const (
 )
 
 // MountainTime is the America/Denver timezone for proper time handling.
-// It is lazily initialized when NewClient is called and cached for reuse.
-// This variable is exported so other packages (e.g., notify) can access it,
-// but initialization is now done safely through NewClient rather than init().
+// It is lazily initialized on first call to initMountainTime and cached for reuse.
+// This variable is exported so other packages (e.g., notify) can access it.
+// Consumers must ensure NewClient() has been called successfully before accessing
+// this variable, as it will be nil until initialization succeeds.
 var MountainTime *time.Location
 
-// timezoneOnce ensures that timezone initialization happens exactly once,
-// preventing race conditions when multiple goroutines create clients concurrently.
-var timezoneOnce sync.Once
-
-// timezoneErr stores any error that occurred during timezone initialization.
-var timezoneErr error
+// timezoneMutex protects timezone initialization to allow retries on failure
+// while preventing race conditions during concurrent initialization attempts.
+var timezoneMutex sync.Mutex
 
 // initMountainTime loads the America/Denver timezone if not already loaded.
 // Returns an error if the timezone cannot be loaded. This function is safe
-// to call concurrently as it uses sync.Once to ensure single initialization.
+// to call concurrently and will retry loading on each call if previous attempts
+// failed, allowing recovery from transient errors.
 func initMountainTime() error {
-	// Use sync.Once to ensure thread-safe, one-time initialization
-	timezoneOnce.Do(func() {
-		// Load the timezone - this should succeed with embedded tzdata
-		loc, err := time.LoadLocation("America/Denver")
-		if err != nil {
-			timezoneErr = fmt.Errorf("failed to load America/Denver timezone: %w", err)
-			return
-		}
-		MountainTime = loc
-	})
+	timezoneMutex.Lock()
+	defer timezoneMutex.Unlock()
 
-	return timezoneErr
+	// If already successfully loaded, reuse it
+	if MountainTime != nil {
+		return nil
+	}
+
+	// Load the timezone - this should succeed with embedded tzdata
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		return fmt.Errorf("failed to load America/Denver timezone: %w", err)
+	}
+
+	MountainTime = loc
+	return nil
 }
 
 // Client handles HTTP requests to the LPS API with proper timeout and
