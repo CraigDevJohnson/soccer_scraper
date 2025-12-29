@@ -17,12 +17,18 @@ Always add debugging when relevant.
 - Follow standard Go naming conventions (camelCase for unexported, PascalCase for exported)
 - Keep functions focused and single-purpose
 - Use meaningful variable names (avoid single-letter names except for common idioms like `i` in loops)
-- Prefer explicit error handling over panic/recover
 
 **Concurrency:**
 - Use `errgroup.SetLimit()` for bounded concurrency (see `lps/client.go` for pattern)
 - Always handle context cancellation properly
 - Document goroutine lifecycles and synchronization mechanisms
+
+**Error Handling:**
+- Prefer explicit error returns over panic/recover
+- Log errors with context before returning them
+- Use structured error messages with team IDs and operation details
+- Transient errors (network, API) should be logged but allow partial success
+- Validation errors should be collected and returned together (see `validate.ParseTeamIDsCSV`)
 
 ## Architecture Overview
 
@@ -30,13 +36,16 @@ This is a Go application that fetches soccer schedules from the LPS (Let's Play 
 
 **Package structure:**
 
-- `cmd/lambda/` - AWS Lambda entrypoint (API Gateway HTTP API v2)
+- `cmd/lambda/` - AWS Lambda entrypoint (API Gateway HTTP API v2 + EventBridge scheduled events)
 - `cmd/scraper/` - Local CLI using urfave/cli
 - `internal/app/` - Core handler logic, request routing, response formatting
 - `internal/lps/` - LPS API client with concurrent fetching
 - `internal/calendar/` - ICS generation with proper VTIMEZONE handling
 - `internal/validate/` - Team ID validation (6-digit format)
 - `internal/types/` - Shared types to avoid import cycles
+- `internal/storage/` - DynamoDB schedule persistence with TTL
+- `internal/sns/` - AWS SNS topic management for email notifications
+- `internal/notify/` - Schedule comparison and change detection
 
 **Key patterns:**
 
@@ -44,6 +53,8 @@ This is a Go application that fetches soccer schedules from the LPS (Let's Play 
 - Bounded concurrency: `errgroup.SetLimit(8)` in `lps/client.go` for parallel team fetches
 - Embedded tzdata: `_ "time/tzdata"` import ensures `America/Denver` loads in Lambda
 - Handler reuse: Lambda handler initialized in `init()` for connection pooling across invocations
+- Email notifications: SNS topics per team, DynamoDB for schedule persistence with 90-day TTL
+- Change detection: Compare stored schedules with current API data to detect additions, removals, and updates
 
 ## Build & Deployment
 
@@ -72,6 +83,12 @@ Lambda requires:
 
 - `?action=download` + body: `{"games": [...]}`
 - Returns `text/calendar` ICS file
+
+**Subscribe (GET with query params):**
+
+- `?action=subscribe&team_id=123456&email=user@example.com`
+- Returns JSON with subscription details and confirmation instructions
+- User must confirm subscription via email sent by AWS SNS
 
 ## Testing
 
@@ -104,6 +121,15 @@ go build -o bin/scraper.exe ./cmd/scraper
 
 # Test invalid team ID handling
 ./bin/scraper.exe fetch -t invalid
+
+# Test email subscription (requires AWS credentials)
+./bin/scraper.exe subscribe -t 469306 -e your-email@example.com
+
+# Test schedule change detection (requires AWS credentials and existing subscriptions)
+./bin/scraper.exe check-changes
+
+# Test schedule change detection for specific team
+./bin/scraper.exe check-changes -t 469306
 ```
 
 **Lambda Testing:**
@@ -117,6 +143,28 @@ The `golang-ical` library (v0.3.2) lacks `AddDaylight()` on VTimezone. Work arou
 ## Timezone Handling
 
 All times use `America/Denver` (Mountain Time). The ICS output includes a full VTIMEZONE with DST rules (MST/MDT transitions). API times come as UTC and are converted to MT for wall-clock display.
+
+## AWS Infrastructure
+
+**DynamoDB:**
+- Table: `soccer-schedules`
+- Automatically created on first use with TTL enabled
+- Stores schedules with 90-day TTL (covers 8-week season + buffer)
+- Partition key: `team_id` (String)
+
+**SNS:**
+- Topics created per team: `soccer-schedule-{teamID}`
+- Email subscriptions require user confirmation
+- Topics created automatically when users subscribe
+
+**IAM Permissions:**
+- DynamoDB permissions on `soccer-schedules` table: `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:Scan`, `dynamodb:DescribeTable`, `dynamodb:CreateTable`, `dynamodb:UpdateTimeToLive`, `dynamodb:DescribeTimeToLive`
+- SNS permissions on `soccer-schedule-*` topics: `sns:CreateTopic`, `sns:Subscribe`, `sns:Publish`, `sns:ListSubscriptionsByTopic`
+
+**EventBridge Scheduled Events:**
+- Lambda detects EventBridge events automatically
+- Runs `check-changes` logic for all subscribed teams
+- Recommended schedule: Twice daily (3 AM and 3 PM MT) using EventBridge Scheduler with `America/Denver` timezone
 
 ## Development Workflow
 
@@ -161,3 +209,14 @@ All times use `America/Denver` (Mountain Time). The ICS output includes a full V
 - Modify `internal/calendar/ics.go`
 - Test thoroughly as ICS format is strict and timezone handling is complex
 - Remember the golang-ical library limitations (manual VTIMEZONE components)
+
+**Add notification logic:**
+- Schedule comparison in `internal/notify/checker.go`
+- DynamoDB operations in `internal/storage/dynamodb.go`
+- SNS operations in `internal/sns/client.go`
+- Checker in `internal/notify/` uses bounded concurrency with `errgroup` for parallel team checks
+
+**Test AWS integrations locally:**
+- Set AWS credentials via environment variables or `~/.aws/credentials`
+- Use CLI commands: `subscribe`, `check-changes`
+- DynamoDB and SNS resources will be created automatically on first use
