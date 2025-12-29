@@ -1,6 +1,6 @@
 package types
 
-// Package types provide shared data structures used across the soccer
+// Package types provides shared data structures used across the soccer
 // schedule scraper application. These types are defined here to avoid
 // import cycles between packages.
 

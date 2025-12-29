@@ -38,5 +38,5 @@ go.work.sum
 *.zip
 *.json
 admin/
-__pycache__/
+
 .idea

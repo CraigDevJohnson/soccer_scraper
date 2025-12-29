@@ -121,8 +121,10 @@ func ConvertParsedGamesToTypesGames(games []ParsedGame, teamID, teamName, season
 	result := make([]types.Game, len(games))
 	for i, pg := range games {
 		result[i] = types.Game{
-			GameID:   pg.GameID,
-			ID:       fmt.Sprintf("%s_%s_%s_%s_%s", season, pg.FormattedDate, pg.HomeTeam, pg.AwayTeam, pg.Field),
+			GameID: pg.GameID,
+			// ID uses ISODate to ensure a stable, year-accurate identifier component.
+			// Using FormattedDate here could embed a hardcoded year and risk collisions.
+			ID:       fmt.Sprintf("%s_%s_%s_%s_%s", season, pg.ISODate, pg.HomeTeam, pg.AwayTeam, pg.Field),
 			Date:     pg.FormattedDate,
 			DateStr:  pg.ISODate,
 			Field:    pg.Field,

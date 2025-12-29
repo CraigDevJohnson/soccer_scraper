@@ -1,8 +1,8 @@
 package storage
 
 // Package storage provides DynamoDB-based persistence for soccer schedules.
-// It stores schedules with a TTL for automatic cleanup after the season ends
-// and supports comparing current schedules with stored ones to detect changes.
+// It stores schedules with a TTL for automatic cleanup after the season ends.
+// It also supports comparing current schedules with stored ones to detect changes.
 
 import (
 	"context"
