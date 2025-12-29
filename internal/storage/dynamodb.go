@@ -281,3 +281,33 @@ func (c *Client) ListAllSchedules(ctx context.Context) ([]StoredSchedule, error)
 	log.Printf("Found %d stored schedules", len(schedules))
 	return schedules, nil
 }
+
+// HasTeams checks if there are any teams stored in DynamoDB.
+// This is a cost-optimized check that only reads a single item to determine
+// if there are teams to check. Used by EventBridge scheduled rules to skip
+// invocations when there are no subscribed teams.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//
+// Returns:
+//   - bool: True if there is at least one team stored
+//   - error: Any error during the check
+func (c *Client) HasTeams(ctx context.Context) (bool, error) {
+	log.Printf("Checking if there are any stored teams")
+
+	// Use Scan with Limit 1 and Select COUNT to minimize read costs
+	// This only checks for existence, not the actual data
+	result, err := c.dynamoClient.Scan(ctx, &dynamodb.ScanInput{
+		TableName: aws.String(c.tableName),
+		Limit:     aws.Int32(1),
+		Select:    types.SelectCount,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to check for teams: %w", err)
+	}
+
+	hasTeams := result.Count > 0
+	log.Printf("Has teams: %v (count: %d)", hasTeams, result.Count)
+	return hasTeams, nil
+}
