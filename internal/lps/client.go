@@ -117,16 +117,14 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 		result.ErrorType = "RuntimeError"
 		return result
 	}
+	// Always close the response body to avoid resource leaks.
+	// Errors during close are logged for visibility into potential I/O issues.
 	defer func(body io.ReadCloser) {
 		if err := body.Close(); err != nil {
 			log.Printf("Error closing response body for team %s: %v", teamID, err)
 		}
 	}(resp.Body)
 
-	// Always close the response body to avoid resource leaks.
-	// Any error from Body.Close is intentionally ignored here because it is
-	// typically non-actionable once the response has been fully read.
-	defer resp.Body.Close()
 	// Check for non-2xx status codes
 	if resp.StatusCode != http.StatusOK {
 		result.Error = fmt.Errorf("could not fetch any schedule, make sure team ID is accurate")
