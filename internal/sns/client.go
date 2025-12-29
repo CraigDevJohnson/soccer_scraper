@@ -204,26 +204,43 @@ type Subscription struct {
 	Endpoint string
 }
 
-// GetTopicArnFromTeamID extracts the team ID from a topic ARN.
+// GetTeamIDFromTopicArn extracts the team ID from a topic ARN.
 // This is useful when processing topic ARNs to find the associated team.
 //
 // Parameters:
-//   - topicArn: The full topic ARN
+//   - topicArn: The full topic ARN.
 //
 // Returns:
-//   - string: The team ID extracted from the topic name, or empty if not found
-func GetTopicArnFromTeamID(topicArn string) string {
+//   - string: The team ID extracted from the topic name, or an empty string if
+//     the ARN is malformed or does not use the expected topic name prefix.
+func GetTeamIDFromTopicArn(topicArn string) string {
 	// Topic ARN format: arn:aws:sns:{region}:{account}:soccer-schedule-{teamID}
-	// Extract the topic name (last part after the last :)
+	// Extract the topic name (last part after the last colon).
 	parts := strings.Split(topicArn, ":")
 	if len(parts) < 6 {
+		// Return empty string when the ARN does not have the expected number of parts.
 		return ""
 	}
 	topicName := parts[len(parts)-1]
 
-	// Extract team ID from topic name
+	// Extract team ID from topic name by removing the known TopicPrefix.
 	if !strings.HasPrefix(topicName, TopicPrefix) {
+		// Return empty string when the topic does not use the expected prefix.
 		return ""
 	}
 	return strings.TrimPrefix(topicName, TopicPrefix)
+}
+
+// GetTopicArnFromTeamID is deprecated and retained for backward compatibility.
+// It now simply delegates to GetTeamIDFromTopicArn. New code should call
+// GetTeamIDFromTopicArn directly for clearer intent.
+//
+// Parameters:
+//   - topicArn: The full topic ARN.
+//
+// Returns:
+//   - string: The team ID extracted from the topic name, or an empty string if
+//     the ARN is malformed or does not use the expected topic name prefix.
+func GetTopicArnFromTeamID(topicArn string) string {
+	return GetTeamIDFromTopicArn(topicArn)
 }
