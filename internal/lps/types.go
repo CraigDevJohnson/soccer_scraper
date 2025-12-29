@@ -4,6 +4,10 @@ package lps
 // LPS (Let's Play Soccer) API. It handles fetching team schedules and parsing
 // the API responses into internal game structures.
 
+import (
+	"github.com/CraigDevJohnson/soccer_scraper/internal/types"
+)
+
 // APIResponse represents the top-level response from the LPS team schedule API.
 // The API returns team metadata and a list of games for the requested team.
 type APIResponse struct {
@@ -97,4 +101,27 @@ type ParsedGame struct {
 
 	// AwayTeam is the away team name.
 	AwayTeam string
+}
+
+// ConvertParsedGamesToTypesGames converts a slice of ParsedGame to types.Game.
+// This helper function eliminates code duplication when converting parsed API
+// data to the shared Game type used throughout the application.
+//
+// Parameters:
+//   - games: Slice of ParsedGame structs from the LPS client
+//
+// Returns:
+//   - []types.Game: Slice of Game structs for use in comparison and storage
+func ConvertParsedGamesToTypesGames(games []ParsedGame) []types.Game {
+	result := make([]types.Game, len(games))
+	for i, pg := range games {
+		result[i] = types.Game{
+			GameID:   pg.GameID,
+			DateStr:  pg.ISODate,
+			Field:    pg.Field,
+			HomeTeam: pg.HomeTeam,
+			AwayTeam: pg.AwayTeam,
+		}
+	}
+	return result
 }

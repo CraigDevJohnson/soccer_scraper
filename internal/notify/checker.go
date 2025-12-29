@@ -274,17 +274,8 @@ func (c *Checker) CheckAndNotify(ctx context.Context, teamID string) (bool, erro
 		return false, fmt.Errorf("failed to fetch current schedule: %w", result.Error)
 	}
 
-	// Convert to types.Game for comparison
-	var currentGames []types.Game
-	for _, pg := range result.Games {
-		currentGames = append(currentGames, types.Game{
-			GameID:   pg.GameID,
-			DateStr:  pg.ISODate,
-			Field:    pg.Field,
-			HomeTeam: pg.HomeTeam,
-			AwayTeam: pg.AwayTeam,
-		})
-	}
+	// Convert to types.Game for comparison using helper function
+	currentGames := lps.ConvertParsedGamesToTypesGames(result.Games)
 
 	// Compare schedules
 	change := CompareSchedules(stored, currentGames, result.TeamName)

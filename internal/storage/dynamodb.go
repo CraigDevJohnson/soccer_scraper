@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
 	sharedtypes "github.com/CraigDevJohnson/soccer_scraper/internal/types"
 )
 
@@ -232,6 +233,28 @@ func ConvertGamesToStoredGames(games []sharedtypes.Game) []StoredGame {
 	return storedGames
 }
 
+// ConvertParsedGamesToStoredGames converts lps.ParsedGame slice to StoredGame slice.
+// This extracts only the fields needed for storage and comparison from parsed API data.
+//
+// Parameters:
+//   - games: Slice of ParsedGame structs from the LPS client
+//
+// Returns:
+//   - []StoredGame: Slice of StoredGame structs for storage
+func ConvertParsedGamesToStoredGames(games []lps.ParsedGame) []StoredGame {
+	storedGames := make([]StoredGame, len(games))
+	for i, g := range games {
+		storedGames[i] = StoredGame{
+			GameID:   g.GameID,
+			DateStr:  g.ISODate,
+			Field:    g.Field,
+			HomeTeam: g.HomeTeam,
+			AwayTeam: g.AwayTeam,
+		}
+	}
+	return storedGames
+}
+
 // ListAllSchedules retrieves all stored schedules from DynamoDB.
 // This is useful for the scheduled checker to find all teams to check.
 //
@@ -283,9 +306,8 @@ func (c *Client) ListAllSchedules(ctx context.Context) ([]StoredSchedule, error)
 }
 
 // HasTeams checks if there are any teams stored in DynamoDB.
-// This is a cost-optimized check that only reads a single item to determine
-// if there are teams to check. Used by EventBridge scheduled rules to skip
-// invocations when there are no subscribed teams.
+// This is a cost-optimized check that scans for existence without reading item data.
+// Used by EventBridge scheduled rules to skip invocations when there are no subscribed teams.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -296,12 +318,11 @@ func (c *Client) ListAllSchedules(ctx context.Context) ([]StoredSchedule, error)
 func (c *Client) HasTeams(ctx context.Context) (bool, error) {
 	log.Printf("Checking if there are any stored teams")
 
-	// Use Scan with Limit 1 and Select COUNT to minimize read costs
-	// This only checks for existence, not the actual data
+	// Use Scan with Limit 1 to minimize read costs
+	// Check if Count > 0 to determine if any teams exist
 	result, err := c.dynamoClient.Scan(ctx, &dynamodb.ScanInput{
 		TableName: aws.String(c.tableName),
 		Limit:     aws.Int32(1),
-		Select:    types.SelectCount,
 	})
 	if err != nil {
 		return false, fmt.Errorf("failed to check for teams: %w", err)

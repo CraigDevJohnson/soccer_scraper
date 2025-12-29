@@ -347,17 +347,8 @@ func subscribeAction(c *cli.Context) error {
 		return fmt.Errorf("failed to create storage client: %w", err)
 	}
 
-	// Convert games to stored format
-	var games []storage.StoredGame
-	for _, g := range result.Games {
-		games = append(games, storage.StoredGame{
-			GameID:   g.GameID,
-			DateStr:  g.ISODate,
-			Field:    g.Field,
-			HomeTeam: g.HomeTeam,
-			AwayTeam: g.AwayTeam,
-		})
-	}
+	// Convert games to stored format using helper function
+	games := storage.ConvertParsedGamesToStoredGames(result.Games)
 
 	// Save schedule for future comparison
 	fmt.Println("Saving schedule for change tracking...")
