@@ -22,6 +22,10 @@ const (
 	// ActionDownload generates an ICS calendar file from provided games.
 	// Expects POST body with games array, returns text/calendar content.
 	ActionDownload = "download"
+
+	// ActionSubscribe subscribes an email address to schedule change notifications for a team.
+	// Expects team_id and email query parameters, returns JSON with subscription details.
+	ActionSubscribe = "subscribe"
 )
 
 // Type aliases for shared types to simplify usage within this package.
@@ -87,4 +91,29 @@ type ErrorResponse struct {
 type DownloadRequest struct {
 	// Games is the list of games to include in the calendar file.
 	Games []Game `json:"games"`
+}
+
+// SubscribeResponse is the JSON response body for the subscribe action.
+// It confirms the subscription setup and provides details about the team and subscription.
+type SubscribeResponse struct {
+	// Success indicates if the subscription was successful.
+	Success bool `json:"success"`
+
+	// Message is a human-readable message describing the result.
+	Message string `json:"message"`
+
+	// TeamID is the team ID that was subscribed to.
+	TeamID string `json:"team_id"`
+
+	// TeamName is the name of the team.
+	TeamName string `json:"team_name,omitempty"`
+
+	// Email is the email address that was subscribed.
+	Email string `json:"email"`
+
+	// SubscriptionArn is the ARN of the SNS subscription (pending confirmation).
+	SubscriptionArn string `json:"subscription_arn,omitempty"`
+
+	// TopicArn is the ARN of the SNS topic for this team.
+	TopicArn string `json:"topic_arn,omitempty"`
 }

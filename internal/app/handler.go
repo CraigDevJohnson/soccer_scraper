@@ -2,7 +2,7 @@ package app
 
 // Package app provides the core application handler logic for the soccer
 // schedule scraper. It routes incoming requests to the appropriate action
-// (fetch or download) and formats responses.
+// (fetch, download, or subscribe) and formats responses.
 
 import (
 	"context"
@@ -10,9 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/mail"
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/calendar"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
+	"github.com/CraigDevJohnson/soccer_scraper/internal/sns"
+	"github.com/CraigDevJohnson/soccer_scraper/internal/storage"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/validate"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -57,6 +60,7 @@ func NewHandler() (*Handler, error) {
 // It routes based on the 'action' query parameter:
 //   - 'fetch' (default): Retrieve game schedules for specified team IDs
 //   - 'download': Generate an ICS calendar file from provided games
+//   - 'subscribe': Subscribe an email address to schedule change notifications
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -80,6 +84,8 @@ func (h *Handler) HandleRequest(ctx context.Context, request events.APIGatewayV2
 		return h.handleFetch(ctx, request)
 	case ActionDownload:
 		return h.handleDownload(ctx, request)
+	case ActionSubscribe:
+		return h.handleSubscribe(ctx, request)
 	default:
 		return h.errorResponse(400, "Invalid action", "ValidationError", nil, nil, nil)
 	}
@@ -247,4 +253,133 @@ func (h *Handler) validationErrorResponse(invalidTeamIDs []InvalidTeamID, valida
 	}
 
 	return h.jsonResponse(400, errResp)
+}
+
+// handleSubscribe processes the 'subscribe' action to register email notifications for a team.
+// It validates the team ID and email, fetches the current schedule, creates an SNS topic,
+// subscribes the email, and stores the schedule in DynamoDB for future comparison.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - request: The API Gateway v2 HTTP request event
+//
+// Returns:
+//   - events.APIGatewayV2HTTPResponse: The HTTP response with subscription details or error
+func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
+	// Get team_id from query parameters
+	teamID := request.QueryStringParameters["team_id"]
+	if teamID == "" {
+		return h.errorResponse(400,
+			"Team ID is required. Please provide a valid 6-digit team ID.",
+			"ValidationError", nil, nil, nil)
+	}
+
+	// Validate team ID
+	if err := validate.TeamID(teamID); err != nil {
+		return h.errorResponse(400,
+			fmt.Sprintf("Invalid team ID '%s': %v", teamID, err),
+			"ValidationError", nil, nil, nil)
+	}
+
+	// Get email from query parameters
+	email := request.QueryStringParameters["email"]
+	if email == "" {
+		return h.errorResponse(400,
+			"Email address is required.",
+			"ValidationError", nil, nil, nil)
+	}
+
+	// Validate email using net/mail.ParseAddress (RFC 5322 compliant)
+	parsedEmail, err := mail.ParseAddress(email)
+	if err != nil {
+		return h.errorResponse(400,
+			fmt.Sprintf("Invalid email format '%s': %v", email, err),
+			"ValidationError", nil, nil, nil)
+	}
+	// Use the parsed address (handles cases like "Name <email@example.com>")
+	email = parsedEmail.Address
+
+	log.Printf("Processing subscription request for team %s, email %s", teamID, email)
+
+	// Fetch current schedule from LPS API
+	result := h.lpsClient.FetchTeamSchedule(ctx, teamID)
+	if result.Error != nil {
+		log.Printf("Failed to fetch schedule for team %s: %v", teamID, result.Error)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to fetch schedule: %v", result.Error),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	log.Printf("Fetched %d games for team %s (%s)", len(result.Games), teamID, result.TeamName)
+
+	// Create SNS client
+	snsClient, err := sns.NewClient(ctx)
+	if err != nil {
+		log.Printf("Failed to create SNS client: %v", err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to initialize notification service: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Create or get the SNS topic for this team
+	topicArn, err := snsClient.GetOrCreateTopic(ctx, teamID)
+	if err != nil {
+		log.Printf("Failed to create/get SNS topic for team %s: %v", teamID, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to create notification topic: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Subscribe email to the topic
+	subArn, err := snsClient.SubscribeEmail(ctx, topicArn, email)
+	if err != nil {
+		log.Printf("Failed to subscribe email %s to topic %s: %v", email, topicArn, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to subscribe email: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Create storage client
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		log.Printf("Failed to create storage client: %v", err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to initialize storage: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Convert games to stored format using the shared helper functions
+	typesGames := lps.ConvertParsedGamesToTypesGames(result.Games, teamID, result.TeamName, result.Season)
+	games := storage.ConvertGamesToStoredGames(typesGames)
+
+	// Save schedule for future comparison
+	schedule := &storage.StoredSchedule{
+		TeamID:   teamID,
+		TeamName: result.TeamName,
+		Season:   result.Season,
+		Games:    games,
+		TopicArn: topicArn,
+	}
+	err = storageClient.SaveSchedule(ctx, schedule)
+	if err != nil {
+		log.Printf("Failed to save schedule for team %s: %v", teamID, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to save schedule: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	log.Printf("Subscription successful for team %s, email %s", teamID, email)
+
+	// Return success response
+	response := SubscribeResponse{
+		Success:         true,
+		Message:         "Subscription successful. Please check your email to confirm the subscription.",
+		TeamID:          teamID,
+		TeamName:        result.TeamName,
+		Email:           email,
+		SubscriptionArn: subArn,
+		TopicArn:        topicArn,
+	}
+
+	return h.jsonResponse(200, response)
 }
