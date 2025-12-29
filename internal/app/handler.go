@@ -79,7 +79,7 @@ func (h *Handler) HandleRequest(ctx context.Context, request events.APIGatewayV2
 	case ActionFetch:
 		return h.handleFetch(ctx, request)
 	case ActionDownload:
-		return h.handleDownload(request)
+		return h.handleDownload(ctx, request)
 	default:
 		return h.errorResponse(400, "Invalid action", "ValidationError", nil, nil, nil)
 	}
@@ -136,7 +136,11 @@ func (h *Handler) handleFetch(ctx context.Context, request events.APIGatewayV2HT
 
 // handleDownload processes the 'download' action to generate an ICS calendar file.
 // It expects a JSON body with a 'games' array and returns the ICS content.
-func (h *Handler) handleDownload(request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control (currently unused but included for consistency and future extensibility)
+//   - request: The API Gateway v2 HTTP request event
+func (h *Handler) handleDownload(ctx context.Context, request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
 	// Get the request body
 	body := request.Body
 
