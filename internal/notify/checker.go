@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/sns"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/storage"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/types"
+	"golang.org/x/sync/errgroup"
 )
 
 // ScheduleChange represents a detected change in a team's schedule.
@@ -324,8 +326,13 @@ func (c *Checker) CheckAndNotify(ctx context.Context, teamID string) (bool, erro
 	return true, nil
 }
 
-// CheckAllTeams checks all stored teams for schedule changes.
+// MaxConcurrentChecks is the maximum number of concurrent team checks.
+// This prevents overwhelming the LPS API and respects Lambda CPU constraints.
+const MaxConcurrentChecks = 8
+
+// CheckAllTeams checks all stored teams for schedule changes concurrently.
 // This is the main entry point for a scheduled Lambda invocation.
+// Uses bounded concurrency to improve performance while preventing API overload.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -343,18 +350,49 @@ func (c *Checker) CheckAllTeams(ctx context.Context) (int, int, error) {
 		return 0, 0, fmt.Errorf("failed to list schedules: %w", err)
 	}
 
-	changesCount := 0
-	for _, schedule := range schedules {
-		hasChanges, err := c.CheckAndNotify(ctx, schedule.TeamID)
-		if err != nil {
-			log.Printf("Error checking team %s: %v", schedule.TeamID, err)
-			continue
-		}
-		if hasChanges {
-			changesCount++
-		}
+	if len(schedules) == 0 {
+		log.Printf("No teams to check")
+		return 0, 0, nil
 	}
 
-	log.Printf("Scheduled check complete: %d/%d teams had changes", changesCount, len(schedules))
+	log.Printf("Checking %d teams concurrently (max %d at a time)", len(schedules), MaxConcurrentChecks)
+
+	// Use mutex to safely collect results from concurrent goroutines
+	var mu sync.Mutex
+	changesCount := 0
+	errorsCount := 0
+
+	// Create errgroup with bounded concurrency
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(MaxConcurrentChecks)
+
+	for _, schedule := range schedules {
+		// Capture schedule for goroutine closure
+		schedule := schedule
+
+		g.Go(func() error {
+			hasChanges, err := c.CheckAndNotify(ctx, schedule.TeamID)
+
+			// Lock to safely update shared counters
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				log.Printf("Error checking team %s: %v", schedule.TeamID, err)
+				errorsCount++
+				// Return nil to allow other checks to continue
+				return nil
+			}
+			if hasChanges {
+				changesCount++
+			}
+			return nil
+		})
+	}
+
+	// Wait for all checks to complete
+	_ = g.Wait()
+
+	log.Printf("Scheduled check complete: %d/%d teams had changes (%d errors)", changesCount, len(schedules), errorsCount)
 	return changesCount, len(schedules), nil
 }

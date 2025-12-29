@@ -136,70 +136,72 @@ The email notification feature requires the following AWS resources:
    }
    ```
 
-4. **EventBridge Scheduled Rules** (for automatic schedule checking):
+4. **EventBridge Scheduler** (for automatic schedule checking with timezone support):
    
-   The Lambda automatically detects EventBridge scheduled events and runs the `check-changes` logic. Set up two rules to check twice daily at 3 AM and 3 PM Mountain Time:
+   The Lambda automatically detects EventBridge scheduled events and runs the `check-changes` logic. Use **AWS EventBridge Scheduler** (not EventBridge Rules) to run at exactly 3 AM and 3 PM Mountain Time year-round, automatically adjusting for Daylight Saving Time.
 
-   **Rule 1 - Morning Check (3 AM MT):**
-   ```
-   Name: soccer-schedule-check-morning
-   Schedule expression: cron(0 10 * * ? *)
-   Target: Lambda function soccer_schedule_scraper
-   ```
-   *Note: 10:00 UTC = 3 AM MST (winter). During MDT (summer), this runs at 4 AM local.*
+   **Using AWS EventBridge Scheduler (Recommended):**
+   
+   EventBridge Scheduler supports timezone-aware scheduling, so the schedule will always run at the correct local time regardless of DST changes.
 
-   **Rule 2 - Afternoon Check (3 PM MT):**
+   ```bash
+   # Create morning schedule (3 AM Mountain Time, every day)
+   aws scheduler create-schedule \
+     --name soccer-schedule-check-morning \
+     --schedule-expression "cron(0 3 * * ? *)" \
+     --schedule-expression-timezone "America/Denver" \
+     --flexible-time-window '{"Mode":"OFF"}' \
+     --target '{
+       "Arn": "arn:aws:lambda:us-west-2:ACCOUNT_ID:function:soccer_schedule_scraper",
+       "RoleArn": "arn:aws:iam::ACCOUNT_ID:role/EventBridgeSchedulerRole"
+     }' \
+     --state ENABLED
+
+   # Create afternoon schedule (3 PM Mountain Time, every day)
+   aws scheduler create-schedule \
+     --name soccer-schedule-check-afternoon \
+     --schedule-expression "cron(0 15 * * ? *)" \
+     --schedule-expression-timezone "America/Denver" \
+     --flexible-time-window '{"Mode":"OFF"}' \
+     --target '{
+       "Arn": "arn:aws:lambda:us-west-2:ACCOUNT_ID:function:soccer_schedule_scraper",
+       "RoleArn": "arn:aws:iam::ACCOUNT_ID:role/EventBridgeSchedulerRole"
+     }' \
+     --state ENABLED
    ```
-   Name: soccer-schedule-check-afternoon  
-   Schedule expression: cron(0 22 * * ? *)
-   Target: Lambda function soccer_schedule_scraper
+
+   **Create the IAM Role for Scheduler:**
+   ```bash
+   # Create the role
+   aws iam create-role \
+     --role-name EventBridgeSchedulerRole \
+     --assume-role-policy-document '{
+       "Version": "2012-10-17",
+       "Statement": [{
+         "Effect": "Allow",
+         "Principal": {"Service": "scheduler.amazonaws.com"},
+         "Action": "sts:AssumeRole"
+       }]
+     }'
+
+   # Attach Lambda invoke permission
+   aws iam put-role-policy \
+     --role-name EventBridgeSchedulerRole \
+     --policy-name InvokeLambda \
+     --policy-document '{
+       "Version": "2012-10-17",
+       "Statement": [{
+         "Effect": "Allow",
+         "Action": "lambda:InvokeFunction",
+         "Resource": "arn:aws:lambda:us-west-2:ACCOUNT_ID:function:soccer_schedule_scraper"
+       }]
+     }'
    ```
-   *Note: 22:00 UTC = 3 PM MST (winter). During MDT (summer), this runs at 4 PM local.*
 
    **Cost Optimization:**
    - The Lambda checks if there are any teams in DynamoDB before processing
    - If no teams are subscribed, it returns immediately without making API calls
    - This minimizes costs when no one is using the notification feature
-
-   **AWS CLI commands to create the rules:**
-   ```bash
-   # Create morning rule (3 AM MST / 10:00 UTC)
-   aws events put-rule \
-     --name soccer-schedule-check-morning \
-     --schedule-expression "cron(0 10 * * ? *)" \
-     --state ENABLED
-
-   # Create afternoon rule (3 PM MST / 22:00 UTC)  
-   aws events put-rule \
-     --name soccer-schedule-check-afternoon \
-     --schedule-expression "cron(0 22 * * ? *)" \
-     --state ENABLED
-
-   # Add Lambda as target for morning rule
-   aws events put-targets \
-     --rule soccer-schedule-check-morning \
-     --targets "Id"="1","Arn"="arn:aws:lambda:us-west-2:ACCOUNT_ID:function:soccer_schedule_scraper"
-
-   # Add Lambda as target for afternoon rule
-   aws events put-targets \
-     --rule soccer-schedule-check-afternoon \
-     --targets "Id"="1","Arn"="arn:aws:lambda:us-west-2:ACCOUNT_ID:function:soccer_schedule_scraper"
-
-   # Grant EventBridge permission to invoke Lambda (run for each rule)
-   aws lambda add-permission \
-     --function-name soccer_schedule_scraper \
-     --statement-id soccer-schedule-check-morning \
-     --action lambda:InvokeFunction \
-     --principal events.amazonaws.com \
-     --source-arn arn:aws:events:us-west-2:ACCOUNT_ID:rule/soccer-schedule-check-morning
-
-   aws lambda add-permission \
-     --function-name soccer_schedule_scraper \
-     --statement-id soccer-schedule-check-afternoon \
-     --action lambda:InvokeFunction \
-     --principal events.amazonaws.com \
-     --source-arn arn:aws:events:us-west-2:ACCOUNT_ID:rule/soccer-schedule-check-afternoon
-   ```
 
 ## Features
 

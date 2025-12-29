@@ -255,8 +255,9 @@ func ConvertParsedGamesToStoredGames(games []lps.ParsedGame) []StoredGame {
 	return storedGames
 }
 
-// ListAllSchedules retrieves all stored schedules from DynamoDB.
+// ListAllSchedules retrieves all stored schedules from DynamoDB with pagination.
 // This is useful for the scheduled checker to find all teams to check.
+// Uses pagination to handle large datasets efficiently.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -270,9 +271,14 @@ func (c *Client) ListAllSchedules(ctx context.Context) ([]StoredSchedule, error)
 	var schedules []StoredSchedule
 	var lastEvaluatedKey map[string]types.AttributeValue
 
+	// Use pagination with a reasonable page size to prevent memory issues
+	// and improve performance for larger datasets
+	const pageSize int32 = 25
+
 	for {
 		input := &dynamodb.ScanInput{
 			TableName: aws.String(c.tableName),
+			Limit:     aws.Int32(pageSize),
 		}
 		if lastEvaluatedKey != nil {
 			input.ExclusiveStartKey = lastEvaluatedKey
@@ -293,6 +299,8 @@ func (c *Client) ListAllSchedules(ctx context.Context) ([]StoredSchedule, error)
 			}
 			schedules = append(schedules, schedule)
 		}
+
+		log.Printf("Scanned page with %d items (total so far: %d)", len(result.Items), len(schedules))
 
 		// Check if there are more items
 		if result.LastEvaluatedKey == nil {
