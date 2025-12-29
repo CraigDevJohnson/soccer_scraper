@@ -159,9 +159,8 @@ All times use `America/Denver` (Mountain Time). The ICS output includes a full V
 - Topics created automatically when users subscribe
 
 **IAM Permissions:**
-- Lambda/CLI requires: `dynamodb:*` on `soccer-schedules` table
-- Lambda/CLI requires: `sns:*` on `soccer-schedule-*` topics
-- Lambda/CLI requires table creation permissions: `dynamodb:CreateTable`, `dynamodb:DescribeTable`, `dynamodb:UpdateTimeToLive`
+- DynamoDB permissions on `soccer-schedules` table: `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:DeleteItem`, `dynamodb:Scan`, `dynamodb:DescribeTable`, `dynamodb:CreateTable`, `dynamodb:UpdateTimeToLive`, `dynamodb:DescribeTimeToLive`
+- SNS permissions on `soccer-schedule-*` topics: `sns:CreateTopic`, `sns:Subscribe`, `sns:Publish`, `sns:ListSubscriptionsByTopic`
 
 **EventBridge Scheduled Events:**
 - Lambda detects EventBridge events automatically
