@@ -76,15 +76,13 @@ func initMountainTime() error {
 
 // GetMountainTime returns the America/Denver timezone location.
 // It ensures the timezone is initialized before returning it.
-// This function will panic if timezone initialization fails, which should
-// never happen with embedded tzdata. The panic is acceptable because timezone
-// initialization failure is a programming error, not a runtime condition.
-func GetMountainTime() *time.Location {
+// Returns an error if timezone initialization fails (should never happen
+// with embedded tzdata, but handled gracefully for consistency).
+func GetMountainTime() (*time.Location, error) {
 	if err := initMountainTime(); err != nil {
-		// This should never happen with embedded tzdata
-		panic(fmt.Sprintf("failed to initialize Mountain Time timezone: %v", err))
+		return nil, fmt.Errorf("failed to get Mountain Time timezone: %w", err)
 	}
-	return mountainTime
+	return mountainTime, nil
 }
 
 // Client handles HTTP requests to the LPS API with proper timeout and
