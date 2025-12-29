@@ -123,6 +123,10 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 		}
 	}(resp.Body)
 
+	// Always close the response body to avoid resource leaks.
+	// Any error from Body.Close is intentionally ignored here because it is
+	// typically non-actionable once the response has been fully read.
+	defer resp.Body.Close()
 	// Check for non-2xx status codes
 	if resp.StatusCode != http.StatusOK {
 		result.Error = fmt.Errorf("could not fetch any schedule, make sure team ID is accurate")
@@ -228,10 +232,11 @@ func (c *Client) parseGames(apiGames []GameData) ([]ParsedGame, error) {
 			continue
 		}
 
-		// Format date for display
-		formattedDate := gameTime.Format("Mon 01/02/25 03:04 PM")
+		// Format date for display using Go's reference time (Mon Jan 2 15:04:05 MST 2006).
+		// The "06" token represents the two-digit year; using "25" here would hardcode 2025.
+		formattedDate := gameTime.Format("Mon 01/02/06 03:04 PM")
 
-		// ISO format for calendar generation
+		// ISO format for calendar generation and downstream debugging/logging.
 		isoDate := gameTime.Format(time.RFC3339)
 
 		games = append(games, ParsedGame{

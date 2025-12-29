@@ -61,6 +61,23 @@ const (
 )
 
 // SpecialTeams is the list of team names that trigger special event formatting.
+//
+// Historical context:
+//   - The original Python implementation, and earlier revisions of this Go code,
+//     included additional teams here, specifically:
+//   - "MIXED BAG FC"
+//   - "LOOKING TO SCORE"
+//   - "NO BUENO O30"
+//   - Those teams were removed from this map intentionally because they no longer
+//     require special formatting in the current product behavior (for example,
+//     their schedules or naming conventions no longer differ from standard teams,
+//     or they are no longer active).
+//
+// Only "EYE CANDY" is currently treated as a special-case team. If future teams
+// need bespoke calendar formatting, they should be added to this map with an
+// accompanying comment explaining why they are special-cased, to make behavior
+// changes explicit for maintainers and external reviewers.
+//
 // Matches are case-sensitive, matching the Python implementation.
 var SpecialTeams = map[string]bool{
 	"EYE CANDY": true,
