@@ -131,9 +131,19 @@ func (c *Client) SubscribeEmail(ctx context.Context, topicArn, email string) (st
 func (c *Client) PublishScheduleChange(ctx context.Context, topicArn, teamName, message string) error {
 	subject := fmt.Sprintf("Schedule Update: %s", teamName)
 
-	// Truncate subject if too long (SNS limit is 100 chars)
-	if len(subject) > 100 {
-		subject = subject[:97] + "..."
+	// NOTE: SNS enforces a subject length limit (documented as 100 characters).
+	// The original implementation used len(subject) and byte slicing, which can
+	// split multi-byte UTF-8 characters (e.g., accented letters or emojis) and
+	// produce invalid UTF-8. To avoid this, we convert to a rune slice and
+	// truncate on rune boundaries while keeping the same "100-character" intent.
+	runeSubject := []rune(subject)
+	if len(runeSubject) > 100 {
+		// Reserve space for "..." by truncating to 97 runes and then appending.
+		truncatedRunes := runeSubject[:97]
+		subject = string(truncatedRunes) + "..."
+
+		// Debug log to help trace subject truncation behavior in production.
+		log.Printf("Subject truncated for team %s to comply with SNS subject length limits", teamName)
 	}
 
 	log.Printf("Publishing schedule change notification for %s", teamName)
