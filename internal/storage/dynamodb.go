@@ -145,7 +145,14 @@ func (c *Client) ensureTableExists(ctx context.Context) error {
 		var resourceInUseErr *types.ResourceInUseException
 		if errors.As(err, &resourceInUseErr) {
 			log.Printf("DynamoDB table '%s' already exists (created by another process)", c.tableName)
-			// Table exists now, continue to verify it's active
+			// Verify the table actually exists before continuing
+			_, descErr := c.dynamoClient.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+				TableName: aws.String(c.tableName),
+			})
+			if descErr != nil {
+				return fmt.Errorf("table creation failed with ResourceInUseException but DescribeTable also failed: %w", descErr)
+			}
+			// Table exists, continue to verify it's active
 		} else {
 			return fmt.Errorf("failed to create table: %w", err)
 		}
@@ -168,8 +175,9 @@ func (c *Client) ensureTableExists(ctx context.Context) error {
 	// Enable TTL on the 'ttl' attribute for automatic data cleanup
 	err = c.enableTTL(ctx)
 	if err != nil {
-		// Log warning but don't fail - TTL can be enabled manually if needed
-		log.Printf("Warning: failed to enable TTL on table '%s': %v. TTL can be enabled manually.", c.tableName, err)
+		// Log warning but don't fail - TTL enablement might already be in progress
+		// or can be enabled manually if needed
+		log.Printf("Warning: failed to enable TTL on table '%s': %v. TTL can be enabled manually if needed.", c.tableName, err)
 	}
 
 	log.Printf("DynamoDB table '%s' successfully created and configured", c.tableName)
