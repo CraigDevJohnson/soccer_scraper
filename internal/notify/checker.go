@@ -269,8 +269,14 @@ func formatDateTime(isoDate string) string {
 		return isoDate // Return as-is if parsing fails
 	}
 
-	// Use the shared Mountain Time location from the LPS package
-	return t.In(lps.MountainTime).Format("Mon Jan 2 at 3:04 PM MST")
+	// Use the shared Mountain Time location from the LPS package via accessor.
+	// GetMountainTime() ensures proper initialization with embedded tzdata.
+	loc, err := lps.GetMountainTime()
+	if err != nil {
+		// Fallback to UTC if timezone cannot be loaded (should never happen with embedded tzdata)
+		return t.UTC().Format("Mon Jan 2 at 3:04 PM (UTC)")
+	}
+	return t.In(loc).Format("Mon Jan 2 at 3:04 PM MST")
 }
 
 // CheckAndNotify checks a single team's schedule for changes and sends notifications.
