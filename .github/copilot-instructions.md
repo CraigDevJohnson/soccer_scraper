@@ -17,7 +17,6 @@ Always add debugging when relevant.
 - Follow standard Go naming conventions (camelCase for unexported, PascalCase for exported)
 - Keep functions focused and single-purpose
 - Use meaningful variable names (avoid single-letter names except for common idioms like `i` in loops)
-- Prefer explicit error handling over panic/recover
 
 **Concurrency:**
 - Use `errgroup.SetLimit()` for bounded concurrency (see `lps/client.go` for pattern)
