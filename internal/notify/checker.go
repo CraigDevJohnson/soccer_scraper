@@ -224,13 +224,23 @@ func formatGameLine(g storage.StoredGame) string {
 		g.HomeTeam, g.AwayTeam, formatDateTime(g.DateStr), g.Field)
 }
 
-// formatDateTime formats an ISO datetime string for display.
+// formatDateTime formats an ISO datetime string for display in Mountain Time.
+// The output includes the timezone abbreviation (MST or MDT) for clarity.
 func formatDateTime(isoDate string) string {
 	t, err := time.Parse(time.RFC3339, isoDate)
 	if err != nil {
 		return isoDate // Return as-is if parsing fails
 	}
-	return t.Format("Mon Jan 2 at 3:04 PM")
+
+	// Load Mountain Time timezone for consistent display
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		// Fallback to original time if timezone loading fails
+		return t.Format("Mon Jan 2 at 3:04 PM")
+	}
+
+	// Convert to Mountain Time and format with timezone abbreviation
+	return t.In(loc).Format("Mon Jan 2 at 3:04 PM MST")
 }
 
 // CheckAndNotify checks a single team's schedule for changes and sends notifications.
