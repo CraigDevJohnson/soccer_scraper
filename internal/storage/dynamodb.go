@@ -1,8 +1,8 @@
 package storage
 
 // Package storage provides DynamoDB-based persistence for soccer schedules.
-// It stores schedules with a TTL for automatic cleanup after the season ends,
-// and supports comparing current schedules with stored ones to detect changes.
+// It stores schedules with a TTL for automatic cleanup after the season ends.
+// It also supports comparing current schedules with stored ones to detect changes.
 
 import (
 	"context"
@@ -10,13 +10,12 @@ import (
 	"log"
 	"time"
 
+	sharedtypes "github.com/CraigDevJohnson/soccer_scraper/internal/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
-	sharedtypes "github.com/CraigDevJohnson/soccer_scraper/internal/types"
 )
 
 // Configuration constants for DynamoDB storage.
@@ -122,10 +121,10 @@ func (c *Client) SaveSchedule(ctx context.Context, schedule *StoredSchedule) err
 		schedule.TTL = time.Now().Add(DefaultTTLDuration).Unix()
 	}
 
-	// Set last checked time
+	// Set the last checked time
 	schedule.LastChecked = time.Now()
 
-	log.Printf("Saving schedule for team %s with %d games (TTL: %d)", 
+	log.Printf("Saving schedule for team %s with %d games (TTL: %d)",
 		schedule.TeamID, len(schedule.Games), schedule.TTL)
 
 	// Marshal the schedule to DynamoDB attribute values
@@ -225,28 +224,6 @@ func ConvertGamesToStoredGames(games []sharedtypes.Game) []StoredGame {
 		storedGames[i] = StoredGame{
 			GameID:   g.GameID,
 			DateStr:  g.DateStr,
-			Field:    g.Field,
-			HomeTeam: g.HomeTeam,
-			AwayTeam: g.AwayTeam,
-		}
-	}
-	return storedGames
-}
-
-// ConvertParsedGamesToStoredGames converts lps.ParsedGame slice to StoredGame slice.
-// This extracts only the fields needed for storage and comparison from parsed API data.
-//
-// Parameters:
-//   - games: Slice of ParsedGame structs from the LPS client
-//
-// Returns:
-//   - []StoredGame: Slice of StoredGame structs for storage
-func ConvertParsedGamesToStoredGames(games []lps.ParsedGame) []StoredGame {
-	storedGames := make([]StoredGame, len(games))
-	for i, g := range games {
-		storedGames[i] = StoredGame{
-			GameID:   g.GameID,
-			DateStr:  g.ISODate,
 			Field:    g.Field,
 			HomeTeam: g.HomeTeam,
 			AwayTeam: g.AwayTeam,

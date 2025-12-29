@@ -15,7 +15,7 @@ type Game struct {
 	// Generated during fetch to allow clients to identify unique games.
 	ID string `json:"id"`
 
-	// Date is the human-readable formatted date string (e.g., "Sat 01/15 07:00 PM").
+	// Date is the human-readable formatted date string (e.g., "Wed 01/15/25 07:00 PM").
 	// Used for display purposes in the UI.
 	Date string `json:"date"`
 
@@ -33,7 +33,7 @@ type Game struct {
 	// AwayTeam is the name of the visiting/away team for this game.
 	AwayTeam string `json:"away_team"`
 
-	// TeamID is the team ID that was queried to retrieve this game.
+	// TeamID is the team ID queried to retrieve this game.
 	// Added during fetch to track which team request returned this game.
 	TeamID string `json:"team_id"`
 

@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,6 +36,57 @@ const (
 	MaxConcurrentRequests = 8
 )
 
+// mountainTime is the America/Denver timezone for proper time handling.
+// It is lazily initialized on first call to initMountainTime and cached for reuse.
+// This variable is private; use GetMountainTime() to access it, which ensures
+// proper initialization.
+var mountainTime *time.Location
+
+// timezoneMutex protects timezone initialization to allow retries on failure
+// while preventing race conditions during concurrent initialization attempts.
+var timezoneMutex sync.Mutex
+
+// initMountainTime loads the America/Denver timezone if not already loaded.
+// Returns an error if the timezone cannot be loaded. This function is safe
+// to call concurrently and will retry loading on each call if previous attempts
+// failed, allowing recovery from transient errors. Uses double-checked locking
+// for optimal performance.
+func initMountainTime() error {
+	// Fast path: check if already loaded without locking (reads are safe)
+	if mountainTime != nil {
+		return nil
+	}
+
+	// Slow path: acquire lock and check again before loading
+	timezoneMutex.Lock()
+	defer timezoneMutex.Unlock()
+
+	// Double-check: another goroutine may have initialized while we waited for lock
+	if mountainTime != nil {
+		return nil
+	}
+
+	// Load the timezone - this should succeed with embedded tzdata
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		return fmt.Errorf("failed to load America/Denver timezone: %w", err)
+	}
+
+	mountainTime = loc
+	return nil
+}
+
+// GetMountainTime returns the America/Denver timezone location.
+// It ensures the timezone is initialized before returning it.
+// Returns an error if timezone initialization fails (should never happen
+// with embedded tzdata, but handled gracefully for consistency).
+func GetMountainTime() (*time.Location, error) {
+	if err := initMountainTime(); err != nil {
+		return nil, fmt.Errorf("failed to get Mountain Time timezone: %w", err)
+	}
+	return mountainTime, nil
+}
+
 // Client handles HTTP requests to the LPS API with proper timeout and
 // connection pooling. It should be reused across requests for efficiency.
 type Client struct {
@@ -46,17 +99,15 @@ type Client struct {
 
 // NewClient creates a new LPS API client with configured timeouts and
 // the America/Denver timezone loaded for proper game time handling.
-//
 // Returns an error if the timezone cannot be loaded (should not happen
-// with embedded tzdata, but handled defensively).
+// with embedded tzdata, but we handle it gracefully rather than panicking).
 func NewClient() (*Client, error) {
-	// Load America/Denver timezone for proper Mountain Time handling
-	loc, err := time.LoadLocation("America/Denver")
-	if err != nil {
-		return nil, fmt.Errorf("failed to load America/Denver timezone: %w", err)
+	// Initialize the Mountain Time timezone if not already loaded
+	if err := initMountainTime(); err != nil {
+		return nil, fmt.Errorf("failed to initialize timezone: %w", err)
 	}
 
-	// Create HTTP client with timeout and connection pooling
+	// Create an HTTP client with timeout and connection pooling
 	httpClient := &http.Client{
 		Timeout: RequestTimeout,
 		Transport: &http.Transport{
@@ -68,7 +119,7 @@ func NewClient() (*Client, error) {
 
 	return &Client{
 		httpClient: httpClient,
-		location:   loc,
+		location:   mountainTime,
 	}, nil
 }
 
@@ -88,7 +139,7 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 	// Build the API URL for this team
 	url := fmt.Sprintf("%s/%s", BaseURL, teamID)
 
-	// Create request with context for timeout/cancellation
+	// Create a request with context for timeout/cancellation
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to create request: %w", err)
@@ -110,7 +161,13 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 		result.ErrorType = "RuntimeError"
 		return result
 	}
-	defer resp.Body.Close()
+	// Always close the response body to avoid resource leaks.
+	// Errors during close are logged for visibility into potential I/O issues.
+	defer func(body io.ReadCloser) {
+		if err := body.Close(); err != nil {
+			log.Printf("Error closing response body for team %s: %v", teamID, err)
+		}
+	}(resp.Body)
 
 	// Check for non-2xx status codes
 	if resp.StatusCode != http.StatusOK {
@@ -217,10 +274,11 @@ func (c *Client) parseGames(apiGames []GameData) ([]ParsedGame, error) {
 			continue
 		}
 
-		// Format date for display (matches Python: "Sat 01/15 07:00 PM")
-		formattedDate := gameTime.Format("Mon 01/02 03:04 PM")
+		// Format date for display using Go's reference time (Mon Jan 2 15:04:05 MST 2006).
+		// The "06" token represents the two-digit year; using "25" here would hardcode 2025.
+		formattedDate := gameTime.Format("Mon 01/02/06 03:04 PM")
 
-		// ISO format for calendar generation
+		// ISO format for calendar generation and downstream debugging/logging.
 		isoDate := gameTime.Format(time.RFC3339)
 
 		games = append(games, ParsedGame{
@@ -309,23 +367,9 @@ func (c *Client) FetchMultipleTeams(ctx context.Context, teamIDs []string) ([]ty
 				return nil
 			}
 
-			// Convert ParsedGames to types.Game and add to results
-			for _, pg := range result.Games {
-				game := types.Game{
-					GameID:   pg.GameID,
-					Date:     pg.FormattedDate,
-					DateStr:  pg.ISODate,
-					Field:    pg.Field,
-					HomeTeam: pg.HomeTeam,
-					AwayTeam: pg.AwayTeam,
-					TeamID:   teamID,
-					Season:   result.Season,
-					TeamName: result.TeamName,
-					// Generate composite ID for deduplication
-					ID: fmt.Sprintf("%s_%s_%s_%s_%s", result.Season, pg.FormattedDate, pg.HomeTeam, pg.AwayTeam, pg.Field),
-				}
-				allGames = append(allGames, game)
-			}
+			// Convert ParsedGames to types.Game using the shared helper function
+			games := ConvertParsedGamesToTypesGames(result.Games, teamID, result.TeamName, result.Season)
+			allGames = append(allGames, games...)
 
 			return nil
 		})

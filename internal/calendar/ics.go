@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CraigDevJohnson/soccer_scraper/internal/types"
+
 	// Embed timezone data for reliable America/Denver loading in Lambda
 	_ "time/tzdata"
 
@@ -59,12 +61,26 @@ const (
 )
 
 // SpecialTeams is the list of team names that trigger special event formatting.
+//
+// Historical context:
+//   - The original Python implementation, and earlier revisions of this Go code,
+//     included additional teams here, specifically:
+//   - "MIXED BAG FC"
+//   - "LOOKING TO SCORE"
+//   - "NO BUENO O30"
+//   - Those teams were removed from this map intentionally because they no longer
+//     require special formatting in the current product behavior (for example,
+//     their schedules or naming conventions no longer differ from standard teams,
+//     or they are no longer active).
+//
+// Only "EYE CANDY" is currently treated as a special-case team. If future teams
+// need bespoke calendar formatting, they should be added to this map with an
+// accompanying comment explaining why they are special-cased, to make behavior
+// changes explicit for maintainers and external reviewers.
+//
 // Matches are case-sensitive, matching the Python implementation.
 var SpecialTeams = map[string]bool{
-	"MIXED BAG FC":     true,
-	"LOOKING TO SCORE": true,
-	"NO BUENO O30":     true,
-	"EYE CANDY":        true,
+	"EYE CANDY": true,
 }
 
 // Generator creates ICS calendar files from game data with proper timezone
@@ -86,6 +102,32 @@ func NewGenerator() (*Generator, error) {
 	return &Generator{
 		location: loc,
 	}, nil
+}
+
+// FromAppGames converts a slice of types.Game to a slice of GameEvent.
+// This helper centralizes the conversion logic used by both the Lambda handler
+// and the CLI scraper tool.
+//
+// Parameters:
+//   - games: Slice of Game structs from the app package
+//
+// Returns:
+//   - []GameEvent: Slice of GameEvent structs for ICS generation
+func FromAppGames(games []types.Game) []GameEvent {
+	events := make([]GameEvent, len(games))
+	for i, g := range games {
+		events[i] = GameEvent{
+			GameID:   g.GameID,
+			DateStr:  g.DateStr,
+			Field:    g.Field,
+			HomeTeam: g.HomeTeam,
+			AwayTeam: g.AwayTeam,
+			Season:   g.Season,
+			TeamName: g.TeamName,
+			TeamID:   g.TeamID,
+		}
+	}
+	return events
 }
 
 // GenerateICS creates an ICS calendar string from a list of games.
@@ -128,7 +170,7 @@ func (g *Generator) GenerateICS(games []GameEvent) (string, error) {
 // addTimezone adds the VTIMEZONE component for America/Denver with DST rules.
 // This ensures calendar clients properly interpret the event times.
 // Uses Mountain Time with:
-//   - STANDARD: MST (UTC-7) starting first Sunday of November
+//   - STANDARD: MST (UTC-7) starting the first Sunday of November
 //   - DAYLIGHT: MDT (UTC-6) starting second Sunday of March
 func (g *Generator) addTimezone(cal *ics.Calendar) {
 	// Add timezone definition using the library's built-in method
@@ -143,7 +185,7 @@ func (g *Generator) addTimezone(cal *ics.Calendar) {
 	standard.AddProperty(ics.ComponentProperty(ics.PropertyRrule), "FREQ=YEARLY;BYMONTH=11;BYDAY=1SU")
 	standard.AddProperty(ics.ComponentProperty(ics.PropertyTzname), "MST")
 
-	// Add DAYLIGHT component (summer time: MDT, UTC-6)
+	// Add a DAYLIGHT component (summer: MDT, UTC-6)
 	// Transition: Second Sunday of March at 2:00 AM local time
 	// Note: golang-ical v0.3.2 doesn't have AddDaylight(), so we create it manually
 	// and append to the VTimezone.Components slice (which is exposed via ComponentBase)
@@ -154,13 +196,13 @@ func (g *Generator) addTimezone(cal *ics.Calendar) {
 	daylight.AddProperty(ics.ComponentProperty(ics.PropertyRrule), "FREQ=YEARLY;BYMONTH=3;BYDAY=2SU")
 	daylight.AddProperty(ics.ComponentProperty(ics.PropertyTzname), "MDT")
 
-	// Append the daylight component to the timezone's sub-components
+	// Append the daylight component to the timezone's subcomponents
 	tz.Components = append(tz.Components, daylight)
 }
 
 // addEvent creates a single VEVENT component from a game and adds it to the calendar.
 func (g *Generator) addEvent(cal *ics.Calendar, game GameEvent, index int) error {
-	// Parse the game datetime from ISO string
+	// Parse the game datetime from an ISO string
 	gameTime, err := time.Parse(time.RFC3339, game.DateStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse game time: %w", err)
@@ -183,7 +225,7 @@ func (g *Generator) addEvent(cal *ics.Calendar, game GameEvent, index int) error
 		event.SetSummary(fmt.Sprintf("%s vs %s", game.HomeTeam, game.AwayTeam))
 	}
 
-	// Set start time with timezone using AddProperty for TZID parameter
+	// Set the start time with timezone using AddProperty for TZID parameter
 	// Format: DTSTART;TZID=America/Denver:20250115T190000
 	dtStart := gameTime.Format("20060102T150405")
 	event.AddProperty(ics.ComponentPropertyDtStart, dtStart, ics.WithTZID(TimezoneName))
@@ -207,7 +249,7 @@ func (g *Generator) addEvent(cal *ics.Calendar, game GameEvent, index int) error
 	}
 	event.SetDescription(description)
 
-	// Add timestamp for when the event was created
+	// Add a timestamp for when the event was created
 	event.SetDtStampTime(time.Now().UTC())
 
 	// Add alarm (40 minutes before)
@@ -230,7 +272,7 @@ func (g *Generator) addEvent(cal *ics.Calendar, game GameEvent, index int) error
 // Returns:
 //   - string: The suggested filename
 func GetFilename(season, teamName, teamID string) string {
-	// Replace spaces with underscores in team name
+	// Replace spaces with underscores in the team name
 	safeName := strings.ReplaceAll(teamName, " ", "_")
 	return fmt.Sprintf("%s_%s_%s.ics", season, safeName, teamID)
 }

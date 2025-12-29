@@ -1,6 +1,6 @@
 module github.com/CraigDevJohnson/soccer_scraper
 
-go 1.24.0 // NOTE: Go module files require a major.minor version; 1.23 is a current stable target for this project.
+go 1.24.0
 
 require (
 	github.com/arran4/golang-ical v0.3.2

@@ -18,25 +18,20 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Use the Go version declared in go.mod to avoid version mismatches between
-          # local builds, CI, and deployment. This also helps catch invalid versions
-          # early, since actions/setup-go will fail fast if go.mod specifies one.
           go-version-file: "go.mod"
           cache: true
 
       - name: Build Lambda Binary
         run: |
-          # Build for Linux/ARM64 (Lambda provided.al2023 with Graviton2 - cheaper)
           # Output binary must be named 'bootstrap' for provided.al2023 runtime
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap ./cmd/lambda
 
       - name: Package Lambda
         run: |
-          # Create deployment zip with the bootstrap binary
           zip function.zip bootstrap
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

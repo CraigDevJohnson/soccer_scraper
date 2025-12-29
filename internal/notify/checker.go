@@ -87,6 +87,34 @@ func NewChecker(lpsClient *lps.Client, storageClient *storage.Client, snsClient 
 	}
 }
 
+// NewCheckerWithClients initializes all required clients and returns a new Checker.
+// This helper simplifies checker setup in both Lambda and CLI environments.
+//
+// Parameters:
+//   - ctx: Context for client initialization
+//
+// Returns:
+//   - *Checker: The initialized checker
+//   - error: Any error during client initialization
+func NewCheckerWithClients(ctx context.Context) (*Checker, error) {
+	lpsClient, err := lps.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create LPS client: %w", err)
+	}
+
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage client: %w", err)
+	}
+
+	snsClient, err := sns.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SNS client: %w", err)
+	}
+
+	return NewChecker(lpsClient, storageClient, snsClient), nil
+}
+
 // CompareSchedules compares a current schedule with a stored one to detect changes.
 //
 // Parameters:
@@ -95,7 +123,7 @@ func NewChecker(lpsClient *lps.Client, storageClient *storage.Client, snsClient 
 //   - teamName: The team name for the change report
 //
 // Returns:
-//   - *ScheduleChange: The detected changes (may be empty if no changes)
+//   - *ScheduleChange: The detected changes (empty if no changes)
 func CompareSchedules(stored *storage.StoredSchedule, current []types.Game, teamName string) *ScheduleChange {
 	change := &ScheduleChange{
 		TeamID:   stored.TeamID,
@@ -110,15 +138,9 @@ func CompareSchedules(stored *storage.StoredSchedule, current []types.Game, team
 	}
 
 	currentMap := make(map[string]storage.StoredGame)
-	for _, g := range current {
-		sg := storage.StoredGame{
-			GameID:   g.GameID,
-			DateStr:  g.DateStr,
-			Field:    g.Field,
-			HomeTeam: g.HomeTeam,
-			AwayTeam: g.AwayTeam,
-		}
-		currentMap[g.GameID] = sg
+	storedGames := storage.ConvertGamesToStoredGames(current)
+	for _, sg := range storedGames {
+		currentMap[sg.GameID] = sg
 	}
 
 	// Find added and updated games
@@ -247,14 +269,13 @@ func formatDateTime(isoDate string) string {
 		return isoDate // Return as-is if parsing fails
 	}
 
-	// Load Mountain Time timezone for consistent display
-	loc, err := time.LoadLocation("America/Denver")
+	// Use the shared Mountain Time location from the LPS package via accessor.
+	// GetMountainTime() ensures proper initialization with embedded tzdata.
+	loc, err := lps.GetMountainTime()
 	if err != nil {
-		// Fallback to original time if timezone loading fails
-		return t.Format("Mon Jan 2 at 3:04 PM")
+		// Fallback to UTC if timezone cannot be loaded (should never happen with embedded tzdata)
+		return t.UTC().Format("Mon Jan 2 at 3:04 PM (UTC)")
 	}
-
-	// Convert to Mountain Time and format with timezone abbreviation
 	return t.In(loc).Format("Mon Jan 2 at 3:04 PM MST")
 }
 
@@ -289,13 +310,13 @@ func (c *Checker) CheckAndNotify(ctx context.Context, teamID string) (bool, erro
 		return false, fmt.Errorf("failed to fetch current schedule: %w", result.Error)
 	}
 
-	// Convert to types.Game for comparison using helper function
-	currentGames := lps.ConvertParsedGamesToTypesGames(result.Games)
+	// Convert to types.Game for comparison using the helper function
+	currentGames := lps.ConvertParsedGamesToTypesGames(result.Games, result.TeamID, result.TeamName, result.Season)
 
 	// Compare schedules
 	change := CompareSchedules(stored, currentGames, result.TeamName)
 
-	// If no changes, update last checked time and return
+	// If no changes, update the last checked time and return
 	if !change.HasChanges() {
 		log.Printf("No schedule changes detected for team %s", teamID)
 		// Update stored schedule with new last checked time
@@ -326,7 +347,7 @@ func (c *Checker) CheckAndNotify(ctx context.Context, teamID string) (bool, erro
 		}
 	}
 
-	// Update stored schedule with current data
+	// Update the stored schedule with current data
 	stored.Games = storage.ConvertGamesToStoredGames(currentGames)
 	stored.TeamName = result.TeamName
 	stored.Season = result.Season

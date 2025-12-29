@@ -38,7 +38,7 @@ func NewClient(ctx context.Context) (*Client, error) {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Create SNS client
+	// Create an SNS client
 	snsClient := sns.NewFromConfig(cfg)
 
 	return &Client{
@@ -228,29 +228,15 @@ func GetTeamIDFromTopicArn(topicArn string) string {
 	// Extract the topic name (last part after the last colon).
 	parts := strings.Split(topicArn, ":")
 	if len(parts) < 6 {
-		// Return empty string when the ARN does not have the expected number of parts.
+		// Return an empty string when the ARN does not have the expected number of parts.
 		return ""
 	}
 	topicName := parts[len(parts)-1]
 
-	// Extract team ID from topic name by removing the known TopicPrefix.
+	// Extract team ID from the topic name by removing the known TopicPrefix.
 	if !strings.HasPrefix(topicName, TopicPrefix) {
-		// Return empty string when the topic does not use the expected prefix.
+		// Return an empty string when the topic does not use the expected prefix.
 		return ""
 	}
 	return strings.TrimPrefix(topicName, TopicPrefix)
-}
-
-// GetTopicArnFromTeamID is deprecated and retained for backward compatibility.
-// It now simply delegates to GetTeamIDFromTopicArn. New code should call
-// GetTeamIDFromTopicArn directly for clearer intent.
-//
-// Parameters:
-//   - topicArn: The full topic ARN.
-//
-// Returns:
-//   - string: The team ID extracted from the topic name, or an empty string if
-//     the ARN is malformed or does not use the expected topic name prefix.
-func GetTopicArnFromTeamID(topicArn string) string {
-	return GetTeamIDFromTopicArn(topicArn)
 }

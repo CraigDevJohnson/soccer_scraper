@@ -110,13 +110,14 @@ func main() {
 	}
 }
 
-// fetchAction handles the 'fetch' command to retrieve game schedules.
-func fetchAction(c *cli.Context) error {
-	// Parse and validate team IDs
+// prepareClientAndTeams is a helper to parse team IDs and initialize the LPS client.
+// This reduces duplication in fetchAction and downloadAction.
+func prepareClientAndTeams(c *cli.Context) (*lps.Client, []string, []app.InvalidTeamID, error) {
+	// Parse and validate team IDs from the "team-ids" flag
 	teamIDsParam := c.String("team-ids")
 	validTeamIDs, invalidTeamIDs := validate.ParseTeamIDsCSV(teamIDsParam)
 
-	// Report any invalid team IDs
+	// Report any invalid team IDs to stdout
 	if len(invalidTeamIDs) > 0 {
 		fmt.Println("\nInvalid team IDs:")
 		for _, inv := range invalidTeamIDs {
@@ -124,15 +125,35 @@ func fetchAction(c *cli.Context) error {
 		}
 	}
 
-	// Exit if no valid team IDs
+	// Fail if no valid team IDs were provided
 	if len(validTeamIDs) == 0 {
-		return fmt.Errorf("no valid team IDs provided")
+		return nil, nil, nil, fmt.Errorf("no valid team IDs provided")
 	}
 
-	// Create LPS client
+	// Initialize the LPS client
 	client, err := lps.NewClient()
 	if err != nil {
-		return fmt.Errorf("failed to create LPS client: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create LPS client: %w", err)
+	}
+
+	return client, validTeamIDs, invalidTeamIDs, nil
+}
+
+// reportFailedTeams prints any teams that failed during the fetch process.
+func reportFailedTeams(failedTeams []app.FailedTeam) {
+	if len(failedTeams) > 0 {
+		fmt.Println("\nFailed to fetch some teams:")
+		for _, ft := range failedTeams {
+			fmt.Printf("  - Team %s: %s\n", ft.TeamID, ft.Error)
+		}
+	}
+}
+
+// fetchAction handles the 'fetch' command to retrieve game schedules.
+func fetchAction(c *cli.Context) error {
+	client, validTeamIDs, invalidTeamIDs, err := prepareClientAndTeams(c)
+	if err != nil {
+		return err
 	}
 
 	// Fetch games concurrently for all valid team IDs
@@ -140,12 +161,7 @@ func fetchAction(c *cli.Context) error {
 	games, failedTeams := client.FetchMultipleTeams(context.Background(), validTeamIDs)
 
 	// Report any failed teams
-	if len(failedTeams) > 0 {
-		fmt.Println("\nFailed to fetch some teams:")
-		for _, ft := range failedTeams {
-			fmt.Printf("  - Team %s: %s\n", ft.TeamID, ft.Error)
-		}
-	}
+	reportFailedTeams(failedTeams)
 
 	// Output results
 	if c.Bool("json") {
@@ -192,27 +208,9 @@ func fetchAction(c *cli.Context) error {
 
 // downloadAction handles the 'download' command to generate an ICS calendar file.
 func downloadAction(c *cli.Context) error {
-	// Parse and validate team IDs
-	teamIDsParam := c.String("team-ids")
-	validTeamIDs, invalidTeamIDs := validate.ParseTeamIDsCSV(teamIDsParam)
-
-	// Report any invalid team IDs
-	if len(invalidTeamIDs) > 0 {
-		fmt.Println("\nInvalid team IDs:")
-		for _, inv := range invalidTeamIDs {
-			fmt.Printf("  - %s: %s\n", inv.ID, inv.Reason)
-		}
-	}
-
-	// Exit if no valid team IDs
-	if len(validTeamIDs) == 0 {
-		return fmt.Errorf("no valid team IDs provided")
-	}
-
-	// Create LPS client
-	client, err := lps.NewClient()
+	client, validTeamIDs, _, err := prepareClientAndTeams(c)
 	if err != nil {
-		return fmt.Errorf("failed to create LPS client: %w", err)
+		return err
 	}
 
 	// Fetch games concurrently for all valid team IDs
@@ -220,12 +218,7 @@ func downloadAction(c *cli.Context) error {
 	games, failedTeams := client.FetchMultipleTeams(context.Background(), validTeamIDs)
 
 	// Report any failed teams
-	if len(failedTeams) > 0 {
-		fmt.Println("\nFailed to fetch some teams:")
-		for _, ft := range failedTeams {
-			fmt.Printf("  - Team %s: %s\n", ft.TeamID, ft.Error)
-		}
-	}
+	reportFailedTeams(failedTeams)
 
 	// Exit if no games found
 	if len(games) == 0 {
@@ -240,20 +233,8 @@ func downloadAction(c *cli.Context) error {
 		return fmt.Errorf("failed to create ICS generator: %w", err)
 	}
 
-	// Convert app.Game to calendar.GameEvent for ICS generation
-	gameEvents := make([]calendar.GameEvent, len(games))
-	for i, g := range games {
-		gameEvents[i] = calendar.GameEvent{
-			GameID:   g.GameID,
-			DateStr:  g.DateStr,
-			Field:    g.Field,
-			HomeTeam: g.HomeTeam,
-			AwayTeam: g.AwayTeam,
-			Season:   g.Season,
-			TeamName: g.TeamName,
-			TeamID:   g.TeamID,
-		}
-	}
+	// Convert app.Game to calendar.GameEvent for ICS generation using the helper
+	gameEvents := calendar.FromAppGames(games)
 
 	// Generate ICS content
 	icsContent, err := icsGen.GenerateICS(gameEvents)
@@ -273,7 +254,7 @@ func downloadAction(c *cli.Context) error {
 		}
 	}
 
-	// Write to file with proper line endings (CRLF for ICS)
+	// Write to a file with proper line endings (CRLF for ICS)
 	err = os.WriteFile(filename, []byte(icsContent), 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write calendar file: %w", err)
@@ -293,7 +274,7 @@ func subscribeAction(c *cli.Context) error {
 
 	// Validate team ID
 	teamIDParam := c.String("team-id")
-	if err := validate.ValidateTeamID(teamIDParam); err != nil {
+	if err := validate.TeamID(teamIDParam); err != nil {
 		return fmt.Errorf("invalid team ID: %w", err)
 	}
 
@@ -322,7 +303,7 @@ func subscribeAction(c *cli.Context) error {
 
 	fmt.Printf("Found %d games for %s (Season: %s)\n", len(result.Games), result.TeamName, result.Season)
 
-	// Create SNS client and topic
+	// Create an SNS client and topic
 	snsClient, err := sns.NewClient(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create SNS client: %w", err)
@@ -334,7 +315,7 @@ func subscribeAction(c *cli.Context) error {
 		return fmt.Errorf("failed to create topic: %w", err)
 	}
 
-	// Subscribe email to topic
+	// Subscribe email to a topic
 	fmt.Println("Subscribing email to topic...")
 	subArn, err := snsClient.SubscribeEmail(ctx, topicArn, email)
 	if err != nil {
@@ -347,8 +328,9 @@ func subscribeAction(c *cli.Context) error {
 		return fmt.Errorf("failed to create storage client: %w", err)
 	}
 
-	// Convert games to stored format using helper function
-	games := storage.ConvertParsedGamesToStoredGames(result.Games)
+	// Convert games to stored format using the shared helper functions
+	typesGames := lps.ConvertParsedGamesToTypesGames(result.Games, teamIDParam, result.TeamName, result.Season)
+	games := storage.ConvertGamesToStoredGames(typesGames)
 
 	// Save schedule for future comparison
 	fmt.Println("Saving schedule for change tracking...")
@@ -387,30 +369,17 @@ func subscribeAction(c *cli.Context) error {
 func checkChangesAction(c *cli.Context) error {
 	ctx := context.Background()
 
-	// Create all required clients
-	lpsClient, err := lps.NewClient()
+	// Create the checker with all required clients using the helper
+	checker, err := notify.NewCheckerWithClients(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to create LPS client: %w", err)
+		return err
 	}
-
-	snsClient, err := sns.NewClient(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create SNS client: %w", err)
-	}
-
-	storageClient, err := storage.NewClient(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create storage client: %w", err)
-	}
-
-	// Create the checker
-	checker := notify.NewChecker(lpsClient, storageClient, snsClient)
 
 	// Check specific team or all teams
 	teamID := c.String("team-id")
 	if teamID != "" {
 		// Validate team ID
-		if err := validate.ValidateTeamID(teamID); err != nil {
+		if err := validate.TeamID(teamID); err != nil {
 			return fmt.Errorf("invalid team ID: %w", err)
 		}
 

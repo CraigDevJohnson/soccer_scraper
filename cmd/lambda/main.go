@@ -36,7 +36,7 @@ func init() {
 }
 
 // ScheduledEvent represents an EventBridge scheduled event payload.
-// This is used to identify scheduled invocations vs API Gateway requests.
+// This is used to identify scheduled invocations vs. API Gateway requests.
 type ScheduledEvent struct {
 	// Source identifies EventBridge scheduled events (e.g., "aws.events")
 	Source string `json:"source"`
@@ -46,12 +46,6 @@ type ScheduledEvent struct {
 
 	// Detail contains custom event data (can include action override)
 	Detail json.RawMessage `json:"detail"`
-}
-
-// ScheduledEventDetail contains optional configuration for scheduled events.
-type ScheduledEventDetail struct {
-	// Action specifies which action to run (defaults to "check-changes")
-	Action string `json:"action"`
 }
 
 // CheckChangesResponse is returned when the Lambda is triggered for schedule checking.
@@ -70,7 +64,7 @@ type CheckChangesResponse struct {
 }
 
 // handleRequest is the unified Lambda handler that routes between API Gateway
-// and EventBridge scheduled events. It detects the event type and delegates
+// and EventBridge scheduled events. It detects the event type and delegates it
 // to the appropriate handler.
 //
 // Parameters:
@@ -90,7 +84,7 @@ func handleRequest(ctx context.Context, rawEvent json.RawMessage) (interface{}, 
 		// that might coincidentally include one of these fields.
 		if scheduledEvent.Source == "aws.events" && scheduledEvent.DetailType == "Scheduled Event" {
 			log.Println("Detected EventBridge scheduled event, running check-changes")
-			return handleScheduledCheck(ctx, scheduledEvent)
+			return handleScheduledCheck(ctx)
 		}
 
 		// Debug log for events that decode into ScheduledEvent but do not match
@@ -125,10 +119,10 @@ func handleRequest(ctx context.Context, rawEvent json.RawMessage) (interface{}, 
 // Returns:
 //   - CheckChangesResponse: Result of the check operation
 //   - error: Any error during processing
-func handleScheduledCheck(ctx context.Context, event ScheduledEvent) (CheckChangesResponse, error) {
+func handleScheduledCheck(ctx context.Context) (CheckChangesResponse, error) {
 	log.Println("Starting scheduled schedule check")
 
-	// Initialize storage client to check for teams
+	// Initialize the storage client to check for teams
 	storageClient, err := storage.NewClient(ctx)
 	if err != nil {
 		log.Printf("Failed to create storage client: %v", err)

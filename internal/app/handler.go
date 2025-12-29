@@ -28,7 +28,7 @@ type Handler struct {
 	icsGenerator *calendar.Generator
 }
 
-// NewHandler creates a new Handler with initialized LPS client and ICS generator.
+// NewHandler creates a new Handler with an initialized LPS client and ICS generator.
 // This should be called once during Lambda cold start and reused across invocations.
 //
 // Returns an error if the LPS client or ICS generator fails to initialize
@@ -74,7 +74,7 @@ func (h *Handler) HandleRequest(ctx context.Context, request events.APIGatewayV2
 		action = ActionFetch
 	}
 
-	// Route to appropriate handler
+	// Route to the appropriate handler
 	switch action {
 	case ActionFetch:
 		return h.handleFetch(ctx, request)
@@ -106,7 +106,7 @@ func (h *Handler) handleFetch(ctx context.Context, request events.APIGatewayV2HT
 		validationErrors = append(validationErrors, inv.Reason)
 	}
 
-	// If no valid team IDs, return error with details
+	// If no valid team IDs, return the error with details
 	if len(validTeamIDs) == 0 {
 		return h.validationErrorResponse(invalidTeamIDs, validationErrors)
 	}
@@ -130,12 +130,16 @@ func (h *Handler) handleFetch(ctx context.Context, request events.APIGatewayV2HT
 		response.InvalidTeamIDs = invalidTeamIDs
 	}
 
-	// Return successful response (even with partial failures)
+	// Return a successful response (even with partial failures)
 	return h.jsonResponse(200, response)
 }
 
 // handleDownload processes the 'download' action to generate an ICS calendar file.
 // It expects a JSON body with a 'games' array and returns the ICS content.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control (currently unused but included for consistency and future extensibility)
+//   - request: The API Gateway v2 HTTP request event
 func (h *Handler) handleDownload(ctx context.Context, request events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPResponse {
 	// Get the request body
 	body := request.Body
@@ -165,20 +169,8 @@ func (h *Handler) handleDownload(ctx context.Context, request events.APIGatewayV
 		return h.errorResponse(400, "No games provided for calendar", "ValidationError", nil, nil, nil)
 	}
 
-	// Convert app.Game to calendar.GameEvent for ICS generation
-	gameEvents := make([]calendar.GameEvent, len(downloadReq.Games))
-	for i, g := range downloadReq.Games {
-		gameEvents[i] = calendar.GameEvent{
-			GameID:   g.GameID,
-			DateStr:  g.DateStr,
-			Field:    g.Field,
-			HomeTeam: g.HomeTeam,
-			AwayTeam: g.AwayTeam,
-			Season:   g.Season,
-			TeamName: g.TeamName,
-			TeamID:   g.TeamID,
-		}
-	}
+	// Convert app.Game to calendar.GameEvent for ICS generation using the helper
+	gameEvents := calendar.FromAppGames(downloadReq.Games)
 
 	// Generate the ICS calendar
 	icsContent, err := h.icsGenerator.GenerateICS(gameEvents)
