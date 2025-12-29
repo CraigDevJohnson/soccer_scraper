@@ -40,23 +40,29 @@ const (
 // but initialization is now done safely through NewClient rather than init().
 var MountainTime *time.Location
 
+// timezoneOnce ensures that timezone initialization happens exactly once,
+// preventing race conditions when multiple goroutines create clients concurrently.
+var timezoneOnce sync.Once
+
+// timezoneErr stores any error that occurred during timezone initialization.
+var timezoneErr error
+
 // initMountainTime loads the America/Denver timezone if not already loaded.
 // Returns an error if the timezone cannot be loaded. This function is safe
-// to call concurrently as the time package caches loaded locations.
+// to call concurrently as it uses sync.Once to ensure single initialization.
 func initMountainTime() error {
-	// If already loaded, reuse it
-	if MountainTime != nil {
-		return nil
-	}
+	// Use sync.Once to ensure thread-safe, one-time initialization
+	timezoneOnce.Do(func() {
+		// Load the timezone - this should succeed with embedded tzdata
+		loc, err := time.LoadLocation("America/Denver")
+		if err != nil {
+			timezoneErr = fmt.Errorf("failed to load America/Denver timezone: %w", err)
+			return
+		}
+		MountainTime = loc
+	})
 
-	// Load the timezone - this should succeed with embedded tzdata
-	loc, err := time.LoadLocation("America/Denver")
-	if err != nil {
-		return fmt.Errorf("failed to load America/Denver timezone: %w", err)
-	}
-
-	MountainTime = loc
-	return nil
+	return timezoneErr
 }
 
 // Client handles HTTP requests to the LPS API with proper timeout and

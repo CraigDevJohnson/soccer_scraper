@@ -276,7 +276,7 @@ func formatDateTime(isoDate string) string {
 	}
 
 	// Fallback to UTC if MountainTime is not initialized (should not happen in normal operation)
-	return t.UTC().Format("Mon Jan 2 at 3:04 PM MST")
+	return t.UTC().Format("Mon Jan 2 at 3:04 PM (UTC)")
 }
 
 // CheckAndNotify checks a single team's schedule for changes and sends notifications.
