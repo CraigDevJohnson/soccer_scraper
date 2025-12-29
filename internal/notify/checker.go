@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -145,6 +146,18 @@ func CompareSchedules(stored *storage.StoredSchedule, current []types.Game, team
 			change.RemovedGames = append(change.RemovedGames, storedGame)
 		}
 	}
+
+	// Sort all slices by GameID for consistent, predictable ordering in notifications
+	// GameID typically reflects chronological order (earlier games have lower IDs)
+	sort.Slice(change.AddedGames, func(i, j int) bool {
+		return change.AddedGames[i].GameID < change.AddedGames[j].GameID
+	})
+	sort.Slice(change.RemovedGames, func(i, j int) bool {
+		return change.RemovedGames[i].GameID < change.RemovedGames[j].GameID
+	})
+	sort.Slice(change.UpdatedGames, func(i, j int) bool {
+		return change.UpdatedGames[i].NewGame.GameID < change.UpdatedGames[j].NewGame.GameID
+	})
 
 	return change
 }
