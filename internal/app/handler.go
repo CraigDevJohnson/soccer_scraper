@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"net/mail"
+	"strings"
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/calendar"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
@@ -21,23 +22,32 @@ import (
 )
 
 // Handler processes incoming API Gateway requests and routes them to the
-// appropriate action handler. It maintains references to the LPS client
-// and calendar generator for reuse across invocations.
+// appropriate action handler. It maintains references to the LPS client,
+// calendar generator, SNS client, and storage client for reuse across invocations.
 type Handler struct {
 	// lpsClient is the HTTP client for LPS API requests.
 	lpsClient *lps.Client
 
 	// icsGenerator creates ICS calendar files from game data.
 	icsGenerator *calendar.Generator
+
+	// snsClient handles SNS topic and subscription operations.
+	snsClient *sns.Client
+
+	// storageClient handles DynamoDB operations for schedule persistence.
+	storageClient *storage.Client
 }
 
-// NewHandler creates a new Handler with an initialized LPS client and ICS generator.
+// NewHandler creates a new Handler with initialized clients and generators.
 // This should be called once during Lambda cold start and reused across invocations.
 //
-// Returns an error if the LPS client or ICS generator fails to initialize
-// (typically due to timezone loading issues, which should not happen with
-// embedded tzdata).
+// Returns an error if any of the clients fail to initialize (typically due to
+// AWS configuration or timezone loading issues, which should not happen with
+// embedded tzdata and proper IAM roles).
 func NewHandler() (*Handler, error) {
+	// Use background context for client initialization during cold start
+	ctx := context.Background()
+
 	// Initialize LPS API client
 	lpsClient, err := lps.NewClient()
 	if err != nil {
@@ -50,9 +60,23 @@ func NewHandler() (*Handler, error) {
 		return nil, fmt.Errorf("failed to create ICS generator: %w", err)
 	}
 
+	// Initialize SNS client for notification management
+	snsClient, err := sns.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SNS client: %w", err)
+	}
+
+	// Initialize storage client for DynamoDB operations
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage client: %w", err)
+	}
+
 	return &Handler{
-		lpsClient:    lpsClient,
-		icsGenerator: icsGen,
+		lpsClient:     lpsClient,
+		icsGenerator:  icsGen,
+		snsClient:     snsClient,
+		storageClient: storageClient,
 	}, nil
 }
 
@@ -299,7 +323,13 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 	// Use the parsed address (handles cases like "Name <email@example.com>")
 	email = parsedEmail.Address
 
-	log.Printf("Processing subscription request for team %s, email %s", teamID, email)
+	// Extract email domain for logging (avoid logging full email for privacy)
+	emailDomain := "unknown"
+	if atIndex := strings.LastIndex(email, "@"); atIndex != -1 && atIndex < len(email)-1 {
+		emailDomain = email[atIndex+1:]
+	}
+
+	log.Printf("Processing subscription request for team %s, email domain %s", teamID, emailDomain)
 
 	// Fetch current schedule from LPS API
 	result := h.lpsClient.FetchTeamSchedule(ctx, teamID)
@@ -312,17 +342,8 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 
 	log.Printf("Fetched %d games for team %s (%s)", len(result.Games), teamID, result.TeamName)
 
-	// Create SNS client
-	snsClient, err := sns.NewClient(ctx)
-	if err != nil {
-		log.Printf("Failed to create SNS client: %v", err)
-		return h.errorResponse(500,
-			fmt.Sprintf("Failed to initialize notification service: %v", err),
-			"RuntimeError", nil, nil, nil)
-	}
-
-	// Create or get the SNS topic for this team
-	topicArn, err := snsClient.GetOrCreateTopic(ctx, teamID)
+	// Create or get the SNS topic for this team using pre-initialized client
+	topicArn, err := h.snsClient.GetOrCreateTopic(ctx, teamID)
 	if err != nil {
 		log.Printf("Failed to create/get SNS topic for team %s: %v", teamID, err)
 		return h.errorResponse(500,
@@ -330,21 +351,36 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 			"RuntimeError", nil, nil, nil)
 	}
 
-	// Subscribe email to the topic
-	subArn, err := snsClient.SubscribeEmail(ctx, topicArn, email)
+	// Check for existing subscriptions to avoid duplicates
+	existingSubscriptions, err := h.snsClient.ListSubscriptions(ctx, topicArn)
 	if err != nil {
-		log.Printf("Failed to subscribe email %s to topic %s: %v", email, topicArn, err)
-		return h.errorResponse(500,
-			fmt.Sprintf("Failed to subscribe email: %v", err),
-			"RuntimeError", nil, nil, nil)
+		log.Printf("Warning: Failed to list existing subscriptions for topic %s: %v", topicArn, err)
+		// Continue anyway - we'll let SNS handle it
+	} else {
+		// Check if this email is already subscribed
+		for _, sub := range existingSubscriptions {
+			if sub.Protocol == "email" && sub.Endpoint == email {
+				log.Printf("Email domain %s already subscribed to team %s", emailDomain, teamID)
+				// Return success with existing subscription info
+				return h.jsonResponse(200, SubscribeResponse{
+					Success:         true,
+					Message:         "This email is already subscribed to notifications for this team.",
+					TeamID:          teamID,
+					TeamName:        result.TeamName,
+					Email:           email,
+					SubscriptionArn: sub.SubscriptionArn,
+					TopicArn:        topicArn,
+				})
+			}
+		}
 	}
 
-	// Create storage client
-	storageClient, err := storage.NewClient(ctx)
+	// Subscribe email to the topic
+	subArn, err := h.snsClient.SubscribeEmail(ctx, topicArn, email)
 	if err != nil {
-		log.Printf("Failed to create storage client: %v", err)
+		log.Printf("Failed to subscribe email domain %s to topic %s: %v", emailDomain, topicArn, err)
 		return h.errorResponse(500,
-			fmt.Sprintf("Failed to initialize storage: %v", err),
+			fmt.Sprintf("Failed to subscribe email: %v", err),
 			"RuntimeError", nil, nil, nil)
 	}
 
@@ -352,7 +388,7 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 	typesGames := lps.ConvertParsedGamesToTypesGames(result.Games, teamID, result.TeamName, result.Season)
 	games := storage.ConvertGamesToStoredGames(typesGames)
 
-	// Save schedule for future comparison
+	// Save schedule for future comparison using pre-initialized client
 	schedule := &storage.StoredSchedule{
 		TeamID:   teamID,
 		TeamName: result.TeamName,
@@ -360,7 +396,7 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 		Games:    games,
 		TopicArn: topicArn,
 	}
-	err = storageClient.SaveSchedule(ctx, schedule)
+	err = h.storageClient.SaveSchedule(ctx, schedule)
 	if err != nil {
 		log.Printf("Failed to save schedule for team %s: %v", teamID, err)
 		return h.errorResponse(500,
@@ -368,7 +404,7 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 			"RuntimeError", nil, nil, nil)
 	}
 
-	log.Printf("Subscription successful for team %s, email %s", teamID, email)
+	log.Printf("Subscription successful for team %s, email domain %s", teamID, emailDomain)
 
 	// Return success response
 	response := SubscribeResponse{
