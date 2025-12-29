@@ -84,11 +84,19 @@ func handleRequest(ctx context.Context, rawEvent json.RawMessage) (interface{}, 
 	// Try to detect if this is an EventBridge scheduled event
 	var scheduledEvent ScheduledEvent
 	if err := json.Unmarshal(rawEvent, &scheduledEvent); err == nil {
-		// Check if this is an EventBridge scheduled event
-		if scheduledEvent.Source == "aws.events" || scheduledEvent.DetailType == "Scheduled Event" {
+		// Check if this is an EventBridge scheduled event by requiring both the
+		// expected source and detail-type values. Using logical AND here avoids
+		// misclassifying other event types (for example, API Gateway requests)
+		// that might coincidentally include one of these fields.
+		if scheduledEvent.Source == "aws.events" && scheduledEvent.DetailType == "Scheduled Event" {
 			log.Println("Detected EventBridge scheduled event, running check-changes")
 			return handleScheduledCheck(ctx, scheduledEvent)
 		}
+
+		// Debug log for events that decode into ScheduledEvent but do not match
+		// the exact EventBridge scheduled event signature. This helps diagnose
+		// unexpected payloads without changing behavior for valid events.
+		log.Printf("Decoded potential ScheduledEvent but did not match EventBridge criteria (source=%q, detailType=%q)", scheduledEvent.Source, scheduledEvent.DetailType)
 	}
 
 	// Otherwise, treat as API Gateway HTTP request
