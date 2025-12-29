@@ -117,8 +117,8 @@ func (c *Client) FetchTeamSchedule(ctx context.Context, teamID string) FetchResu
 		result.ErrorType = "RuntimeError"
 		return result
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
+	defer func(body io.ReadCloser) {
+		if err := body.Close(); err != nil {
 			log.Printf("Error closing response body for team %s: %v", teamID, err)
 		}
 	}(resp.Body)
