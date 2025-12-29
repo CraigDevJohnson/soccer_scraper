@@ -31,6 +31,9 @@ const (
 	// DefaultTTLDuration is the default duration to retain schedule data.
 	// Calculated from DefaultTTLDays for cleaner time calculations.
 	DefaultTTLDuration = DefaultTTLDays * 24 * time.Hour
+
+	// TableCreationTimeout is the maximum time to wait for table creation.
+	TableCreationTimeout = 2 * time.Minute
 )
 
 // Client handles DynamoDB operations for schedule storage.
@@ -138,16 +141,23 @@ func (c *Client) ensureTableExists(ctx context.Context) error {
 
 	_, err = c.dynamoClient.CreateTable(ctx, createInput)
 	if err != nil {
-		return fmt.Errorf("failed to create table: %w", err)
+		// Check if the table was created by another concurrent process
+		var resourceInUseErr *types.ResourceInUseException
+		if errors.As(err, &resourceInUseErr) {
+			log.Printf("DynamoDB table '%s' already exists (created by another process)", c.tableName)
+			// Table exists now, continue to verify it's active
+		} else {
+			return fmt.Errorf("failed to create table: %w", err)
+		}
+	} else {
+		log.Printf("DynamoDB table '%s' creation initiated", c.tableName)
 	}
-
-	log.Printf("DynamoDB table '%s' creation initiated", c.tableName)
 
 	// Wait for the table to become active
 	waiter := dynamodb.NewTableExistsWaiter(c.dynamoClient)
 	err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{
 		TableName: aws.String(c.tableName),
-	}, 2*time.Minute) // Wait up to 2 minutes for table to become active
+	}, TableCreationTimeout)
 
 	if err != nil {
 		return fmt.Errorf("failed waiting for table to become active: %w", err)
@@ -168,6 +178,7 @@ func (c *Client) ensureTableExists(ctx context.Context) error {
 
 // enableTTL enables Time To Live (TTL) on the 'ttl' attribute.
 // This allows DynamoDB to automatically delete expired items.
+// Checks if TTL is already enabled to avoid unnecessary API calls.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -175,9 +186,27 @@ func (c *Client) ensureTableExists(ctx context.Context) error {
 // Returns:
 //   - error: Any error during TTL enablement
 func (c *Client) enableTTL(ctx context.Context) error {
+	log.Printf("Checking TTL status on table '%s'", c.tableName)
+
+	// Check current TTL status
+	ttlDesc, err := c.dynamoClient.DescribeTimeToLive(ctx, &dynamodb.DescribeTimeToLiveInput{
+		TableName: aws.String(c.tableName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to describe TTL: %w", err)
+	}
+
+	// Check if TTL is already enabled
+	if ttlDesc.TimeToLiveDescription != nil &&
+		ttlDesc.TimeToLiveDescription.TimeToLiveStatus == types.TimeToLiveStatusEnabled {
+		log.Printf("TTL is already enabled on table '%s'", c.tableName)
+		return nil
+	}
+
+	// TTL is not enabled, enable it now
 	log.Printf("Enabling TTL on table '%s'", c.tableName)
 
-	_, err := c.dynamoClient.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
+	_, err = c.dynamoClient.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
 		TableName: aws.String(c.tableName),
 		TimeToLiveSpecification: &types.TimeToLiveSpecification{
 			Enabled:       aws.Bool(true),
@@ -189,7 +218,7 @@ func (c *Client) enableTTL(ctx context.Context) error {
 		return fmt.Errorf("failed to enable TTL: %w", err)
 	}
 
-	log.Printf("TTL enabled successfully on table '%s'", c.tableName)
+	log.Printf("TTL enablement initiated on table '%s' (may take a few minutes to complete)", c.tableName)
 	return nil
 }
 
