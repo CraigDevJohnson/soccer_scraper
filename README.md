@@ -130,8 +130,7 @@ The email notification feature requires the following AWS resources:
      "Action": [
        "sns:CreateTopic",
        "sns:Subscribe",
-       "sns:Publish",
-       "sns:ListSubscriptionsByTopic"
+       "sns:Publish"
      ],
      "Resource": "arn:aws:sns:*:*:soccer-schedule-*"
    }
