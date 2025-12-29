@@ -6,6 +6,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -30,6 +31,9 @@ const (
 	// DefaultTTLDuration is the default duration to retain schedule data.
 	// Calculated from DefaultTTLDays for cleaner time calculations.
 	DefaultTTLDuration = DefaultTTLDays * 24 * time.Hour
+
+	// TableCreationTimeout is the maximum time to wait for table creation.
+	TableCreationTimeout = 2 * time.Minute
 )
 
 // Client handles DynamoDB operations for schedule storage.
@@ -44,8 +48,9 @@ type Client struct {
 
 // NewClient creates a new DynamoDB storage client using the default AWS configuration.
 // It loads credentials from environment variables, shared config, or IAM role.
+// The client ensures the DynamoDB table exists on initialization, creating it if necessary.
 //
-// Returns an error if AWS configuration cannot be loaded.
+// Returns an error if AWS configuration cannot be loaded or table creation fails.
 func NewClient(ctx context.Context) (*Client, error) {
 	// Load AWS configuration from environment/shared config
 	cfg, err := config.LoadDefaultConfig(ctx)
@@ -56,10 +61,179 @@ func NewClient(ctx context.Context) (*Client, error) {
 	// Create DynamoDB client
 	dynamoClient := dynamodb.NewFromConfig(cfg)
 
-	return &Client{
+	client := &Client{
 		dynamoClient: dynamoClient,
 		tableName:    TableName,
-	}, nil
+	}
+
+	// Ensure the table exists, creating it if necessary
+	if err := client.ensureTableExists(ctx); err != nil {
+		return nil, fmt.Errorf("failed to ensure table exists: %w", err)
+	}
+
+	return client, nil
+}
+
+// ensureTableExists checks if the DynamoDB table exists and creates it if it doesn't.
+// This method is idempotent - it's safe to call multiple times.
+// The table is created with:
+//   - Partition key: team_id (String)
+//   - Pay-per-request billing mode (no provisioned capacity needed)
+//   - TTL enabled on the 'ttl' attribute for automatic data cleanup
+//   - Tags for identifying the application
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//
+// Returns:
+//   - error: Any error during table existence check or creation
+func (c *Client) ensureTableExists(ctx context.Context) error {
+	log.Printf("Checking if DynamoDB table '%s' exists", c.tableName)
+
+	// Try to describe the table to check if it exists
+	_, err := c.dynamoClient.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(c.tableName),
+	})
+
+	if err == nil {
+		// Table exists
+		log.Printf("DynamoDB table '%s' already exists", c.tableName)
+		return nil
+	}
+
+	// Check if the error is ResourceNotFoundException (table doesn't exist)
+	var notFoundErr *types.ResourceNotFoundException
+	if !errors.As(err, &notFoundErr) {
+		// Some other error occurred (permissions, network, etc.)
+		return fmt.Errorf("failed to describe table: %w", err)
+	}
+
+	// Table doesn't exist, create it
+	log.Printf("DynamoDB table '%s' does not exist, creating it", c.tableName)
+
+	// Create the table with team_id as partition key
+	createInput := &dynamodb.CreateTableInput{
+		TableName: aws.String(c.tableName),
+		AttributeDefinitions: []types.AttributeDefinition{
+			{
+				AttributeName: aws.String("team_id"),
+				AttributeType: types.ScalarAttributeTypeS, // String type
+			},
+		},
+		KeySchema: []types.KeySchemaElement{
+			{
+				AttributeName: aws.String("team_id"),
+				KeyType:       types.KeyTypeHash, // Partition key
+			},
+		},
+		BillingMode: types.BillingModePayPerRequest, // Pay-per-request (no capacity planning needed)
+		Tags: []types.Tag{
+			{
+				Key:   aws.String("Application"),
+				Value: aws.String("soccer-scraper"),
+			},
+			{
+				Key:   aws.String("Purpose"),
+				Value: aws.String("Schedule storage and notification management"),
+			},
+		},
+	}
+
+	_, err = c.dynamoClient.CreateTable(ctx, createInput)
+	if err != nil {
+		// Check if the table was created by another concurrent process
+		var resourceInUseErr *types.ResourceInUseException
+		if errors.As(err, &resourceInUseErr) {
+			log.Printf("DynamoDB table '%s' already exists (created by another process)", c.tableName)
+			// Verify the table actually exists before continuing
+			_, descErr := c.dynamoClient.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+				TableName: aws.String(c.tableName),
+			})
+			if descErr != nil {
+				return fmt.Errorf("table creation failed with ResourceInUseException but DescribeTable also failed: %w", descErr)
+			}
+			// Table exists, continue to verify it's active
+		} else {
+			return fmt.Errorf("failed to create table: %w", err)
+		}
+	} else {
+		log.Printf("DynamoDB table '%s' creation initiated", c.tableName)
+	}
+
+	// Wait for the table to become active
+	waiter := dynamodb.NewTableExistsWaiter(c.dynamoClient)
+	err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{
+		TableName: aws.String(c.tableName),
+	}, TableCreationTimeout)
+
+	if err != nil {
+		return fmt.Errorf("failed waiting for table to become active: %w", err)
+	}
+
+	log.Printf("DynamoDB table '%s' is now active", c.tableName)
+
+	// Enable TTL on the 'ttl' attribute for automatic data cleanup
+	err = c.enableTTL(ctx)
+	if err != nil {
+		// Log warning but don't fail - TTL enablement might already be in progress
+		// or can be enabled manually if needed
+		log.Printf("Warning: failed to enable TTL on table '%s': %v. TTL can be enabled manually if needed.", c.tableName, err)
+	}
+
+	log.Printf("DynamoDB table '%s' successfully created and configured", c.tableName)
+	return nil
+}
+
+// enableTTL enables Time To Live (TTL) on the 'ttl' attribute.
+// This allows DynamoDB to automatically delete expired items.
+// Checks if TTL is already enabled or being enabled to avoid unnecessary API calls.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//
+// Returns:
+//   - error: Any error during TTL enablement
+func (c *Client) enableTTL(ctx context.Context) error {
+	log.Printf("Checking TTL status on table '%s'", c.tableName)
+
+	// Check current TTL status
+	ttlDesc, err := c.dynamoClient.DescribeTimeToLive(ctx, &dynamodb.DescribeTimeToLiveInput{
+		TableName: aws.String(c.tableName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to describe TTL: %w", err)
+	}
+
+	// Check if TTL is already enabled or being enabled
+	if ttlDesc.TimeToLiveDescription != nil {
+		status := ttlDesc.TimeToLiveDescription.TimeToLiveStatus
+		if status == types.TimeToLiveStatusEnabled {
+			log.Printf("TTL is already enabled on table '%s'", c.tableName)
+			return nil
+		}
+		if status == types.TimeToLiveStatusEnabling {
+			log.Printf("TTL is already being enabled on table '%s'", c.tableName)
+			return nil
+		}
+	}
+
+	// TTL is not enabled, enable it now
+	log.Printf("Enabling TTL on table '%s'", c.tableName)
+
+	_, err = c.dynamoClient.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
+		TableName: aws.String(c.tableName),
+		TimeToLiveSpecification: &types.TimeToLiveSpecification{
+			Enabled:       aws.Bool(true),
+			AttributeName: aws.String("ttl"),
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to enable TTL: %w", err)
+	}
+
+	log.Printf("TTL enablement initiated on table '%s' (may take a few minutes to complete)", c.tableName)
+	return nil
 }
 
 // StoredSchedule represents a team's schedule stored in DynamoDB.

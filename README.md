@@ -114,8 +114,10 @@ The subscribe command sets up email notifications for schedule changes:
 The email notification feature requires the following AWS resources:
 
 1. **DynamoDB Table**: `soccer-schedules`
+   - **Automatically created** on first use (no manual setup required)
    - Partition key: `team_id` (String)
-   - TTL attribute: `ttl` (enabled)
+   - TTL attribute: `ttl` (enabled automatically)
+   - Billing mode: Pay-per-request (on-demand)
 
 2. **SNS Topics**: Created automatically with prefix `soccer-schedule-`
    - Topics are created per team when users subscribe
@@ -128,7 +130,11 @@ The email notification feature requires the following AWS resources:
        "dynamodb:PutItem",
        "dynamodb:GetItem",
        "dynamodb:DeleteItem",
-       "dynamodb:Scan"
+       "dynamodb:Scan",
+       "dynamodb:DescribeTable",
+       "dynamodb:CreateTable",
+       "dynamodb:DescribeTimeToLive",
+       "dynamodb:UpdateTimeToLive"
      ],
      "Resource": "arn:aws:dynamodb:*:*:table/soccer-schedules"
    },
@@ -137,11 +143,14 @@ The email notification feature requires the following AWS resources:
      "Action": [
        "sns:CreateTopic",
        "sns:Subscribe",
-       "sns:Publish"
+       "sns:Publish",
+       "sns:ListSubscriptionsByTopic"
      ],
      "Resource": "arn:aws:sns:*:*:soccer-schedule-*"
    }
    ```
+   
+   **Note**: The DynamoDB table is now created automatically on first use. The Lambda function or CLI requires permissions to create the table (`dynamodb:CreateTable`, `dynamodb:DescribeTable`, `dynamodb:UpdateTimeToLive`) on initial deployment.
 
 4. **EventBridge Scheduler** (for automatic schedule checking with timezone support):
    
