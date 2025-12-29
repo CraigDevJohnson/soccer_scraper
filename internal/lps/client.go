@@ -35,17 +35,28 @@ const (
 )
 
 // MountainTime is the America/Denver timezone for proper time handling.
-// It is initialized during package init for reuse across the application.
+// It is lazily initialized when NewClient is called and cached for reuse.
+// This variable is exported so other packages (e.g., notify) can access it,
+// but initialization is now done safely through NewClient rather than init().
 var MountainTime *time.Location
 
-func init() {
-	var err error
-	MountainTime, err = time.LoadLocation("America/Denver")
-	if err != nil {
-		// This should not happen with embedded tzdata, but we panic if it does
-		// as correct timezone handling is critical for game scheduling.
-		panic(fmt.Errorf("failed to load America/Denver timezone: %w", err))
+// initMountainTime loads the America/Denver timezone if not already loaded.
+// Returns an error if the timezone cannot be loaded. This function is safe
+// to call concurrently as the time package caches loaded locations.
+func initMountainTime() error {
+	// If already loaded, reuse it
+	if MountainTime != nil {
+		return nil
 	}
+
+	// Load the timezone - this should succeed with embedded tzdata
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		return fmt.Errorf("failed to load America/Denver timezone: %w", err)
+	}
+
+	MountainTime = loc
+	return nil
 }
 
 // Client handles HTTP requests to the LPS API with proper timeout and
@@ -60,7 +71,14 @@ type Client struct {
 
 // NewClient creates a new LPS API client with configured timeouts and
 // the America/Denver timezone loaded for proper game time handling.
+// Returns an error if the timezone cannot be loaded (should not happen
+// with embedded tzdata, but we handle it gracefully rather than panicking).
 func NewClient() (*Client, error) {
+	// Initialize the Mountain Time timezone if not already loaded
+	if err := initMountainTime(); err != nil {
+		return nil, fmt.Errorf("failed to initialize timezone: %w", err)
+	}
+
 	// Create an HTTP client with timeout and connection pooling
 	httpClient := &http.Client{
 		Timeout: RequestTimeout,
