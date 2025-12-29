@@ -354,24 +354,26 @@ func (h *Handler) handleSubscribe(ctx context.Context, request events.APIGateway
 	// Check for existing subscriptions to avoid duplicates
 	existingSubscriptions, err := h.snsClient.ListSubscriptions(ctx, topicArn)
 	if err != nil {
-		log.Printf("Warning: Failed to list existing subscriptions for topic %s: %v", topicArn, err)
-		// Continue anyway - we'll let SNS handle it
-	} else {
-		// Check if this email is already subscribed
-		for _, sub := range existingSubscriptions {
-			if sub.Protocol == "email" && sub.Endpoint == email {
-				log.Printf("Email domain %s already subscribed to team %s", emailDomain, teamID)
-				// Return success with existing subscription info
-				return h.jsonResponse(200, SubscribeResponse{
-					Success:         true,
-					Message:         "This email is already subscribed to notifications for this team.",
-					TeamID:          teamID,
-					TeamName:        result.TeamName,
-					Email:           email,
-					SubscriptionArn: sub.SubscriptionArn,
-					TopicArn:        topicArn,
-				})
-			}
+		log.Printf("Failed to list existing subscriptions for topic %s: %v", topicArn, err)
+		return h.errorResponse(500,
+			fmt.Sprintf("Failed to check existing subscriptions: %v", err),
+			"RuntimeError", nil, nil, nil)
+	}
+
+	// Check if this email is already subscribed
+	for _, sub := range existingSubscriptions {
+		if sub.Protocol == "email" && sub.Endpoint == email {
+			log.Printf("Email domain %s already subscribed to team %s", emailDomain, teamID)
+			// Return success with existing subscription info
+			return h.jsonResponse(200, SubscribeResponse{
+				Success:         true,
+				Message:         "This email is already subscribed to notifications for this team.",
+				TeamID:          teamID,
+				TeamName:        result.TeamName,
+				Email:           email,
+				SubscriptionArn: sub.SubscriptionArn,
+				TopicArn:        topicArn,
+			})
 		}
 	}
 
