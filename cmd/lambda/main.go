@@ -80,7 +80,7 @@ type CheckChangesResponse struct {
 
 // isScheduledEvent checks if the given raw event is an EventBridge scheduled event.
 // It returns true if the event has source "aws.scheduler" or "aws.events" AND
-// detail-type "Scheduled Event". This function is exported to allow for testing.
+// detail-type "Scheduled Event".
 //
 // Parameters:
 //   - rawEvent: Raw JSON event data

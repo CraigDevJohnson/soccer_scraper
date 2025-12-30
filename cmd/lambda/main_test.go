@@ -7,6 +7,8 @@ import (
 )
 
 // init sets environment variable to skip AWS service initialization during tests.
+// This init function in the test file runs before the main package's init function,
+// ensuring SKIP_LAMBDA_INIT is set before the main initialization logic executes.
 func init() {
 	os.Setenv("SKIP_LAMBDA_INIT", "true")
 }
@@ -156,7 +158,7 @@ func TestScheduledEventParsing(t *testing.T) {
 }
 
 // TestEventDetectionLogic tests the core boolean logic for event detection
-// in isolation from JSON parsing.
+// by calling the actual isScheduledEvent function with constructed JSON payloads.
 func TestEventDetectionLogic(t *testing.T) {
 	tests := []struct {
 		source         string
@@ -210,9 +212,18 @@ func TestEventDetectionLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
-			// This is the exact logic from isScheduledEvent
-			isScheduler := (tt.source == "aws.scheduler" || tt.source == "aws.events") &&
-				tt.detailType == "Scheduled Event"
+			// Construct a JSON payload with the test values
+			payload := map[string]string{
+				"source":      tt.source,
+				"detail-type": tt.detailType,
+			}
+			jsonBytes, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Failed to marshal test payload: %v", err)
+			}
+
+			// Call the actual isScheduledEvent function
+			isScheduler, _ := isScheduledEvent(jsonBytes)
 
 			if isScheduler != tt.expectSchedule {
 				t.Errorf("Expected isScheduler=%v, got %v for source=%q, detailType=%q",
