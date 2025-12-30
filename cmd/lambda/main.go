@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/app"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
@@ -25,7 +26,19 @@ var handler *app.Handler
 // init runs during Lambda cold start to initialize the handler.
 // This is done in init() rather than main() to ensure the handler
 // is ready before any invocations are processed.
+// During testing, this is skipped if SKIP_LAMBDA_INIT=true.
 func init() {
+	if os.Getenv("SKIP_LAMBDA_INIT") == "true" {
+		return
+	}
+	initHandler()
+}
+
+// initHandler initializes the handler if it hasn't been initialized yet.
+func initHandler() {
+	if handler != nil {
+		return // Already initialized
+	}
 	var err error
 	handler, err = app.NewHandler()
 	if err != nil {
@@ -38,7 +51,8 @@ func init() {
 // ScheduledEvent represents an EventBridge scheduled event payload.
 // This is used to identify scheduled invocations vs. API Gateway requests.
 type ScheduledEvent struct {
-	// Source identifies EventBridge scheduled events (e.g., "aws.events")
+	// Source identifies EventBridge scheduled events.
+	// Can be "aws.scheduler" (EventBridge Scheduler) or "aws.events" (EventBridge Rules).
 	Source string `json:"source"`
 
 	// DetailType describes the event type (e.g., "Scheduled Event")
@@ -63,6 +77,33 @@ type CheckChangesResponse struct {
 	Skipped bool `json:"skipped,omitempty"`
 }
 
+// isScheduledEvent checks if the given raw event is an EventBridge scheduled event.
+// It returns true if the event has source "aws.scheduler" or "aws.events" AND
+// detail-type "Scheduled Event".
+//
+// Parameters:
+//   - rawEvent: Raw JSON event data
+//
+// Returns:
+//   - bool: true if this is a valid EventBridge scheduled event
+//   - string: the source value if detected (for logging)
+func isScheduledEvent(rawEvent json.RawMessage) (bool, string) {
+	var scheduledEvent ScheduledEvent
+	if err := json.Unmarshal(rawEvent, &scheduledEvent); err != nil {
+		return false, ""
+	}
+
+	// Check if this is an EventBridge scheduled event by requiring both the
+	// expected source and detail-type values. Using logical AND here avoids
+	// misclassifying other event types (for example, API Gateway requests)
+	// that might coincidentally include one of these fields.
+	// Accept both "aws.scheduler" (EventBridge Scheduler) and "aws.events" (EventBridge Rules).
+	isScheduler := (scheduledEvent.Source == "aws.scheduler" || scheduledEvent.Source == "aws.events") &&
+		scheduledEvent.DetailType == "Scheduled Event"
+
+	return isScheduler, scheduledEvent.Source
+}
+
 // handleRequest is the unified Lambda handler that routes between API Gateway
 // and EventBridge scheduled events. It detects the event type and delegates it
 // to the appropriate handler.
@@ -76,18 +117,14 @@ type CheckChangesResponse struct {
 //   - error: Any error during processing
 func handleRequest(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
 	// Try to detect if this is an EventBridge scheduled event
-	var scheduledEvent ScheduledEvent
-	if err := json.Unmarshal(rawEvent, &scheduledEvent); err == nil {
-		// Check if this is an EventBridge scheduled event by requiring both the
-		// expected source and detail-type values. Using logical AND here avoids
-		// misclassifying other event types (for example, API Gateway requests)
-		// that might coincidentally include one of these fields.
-		if scheduledEvent.Source == "aws.events" && scheduledEvent.DetailType == "Scheduled Event" {
-			log.Println("Detected EventBridge scheduled event, running check-changes")
-			return handleScheduledCheck(ctx)
-		}
+	if isScheduler, source := isScheduledEvent(rawEvent); isScheduler {
+		log.Printf("Detected EventBridge scheduled event (source=%q), running check-changes", source)
+		return handleScheduledCheck(ctx)
+	}
 
-		// Debug log for events that decode into ScheduledEvent but do not match
+	// Debug log for events that might decode into ScheduledEvent but do not match
+	var scheduledEvent ScheduledEvent
+	if err := json.Unmarshal(rawEvent, &scheduledEvent); err == nil && scheduledEvent.Source != "" {
 		// the exact EventBridge scheduled event signature. This helps diagnose
 		// unexpected payloads without changing behavior for valid events.
 		log.Printf("Decoded potential ScheduledEvent but did not match EventBridge criteria (source=%q, detailType=%q)", scheduledEvent.Source, scheduledEvent.DetailType)

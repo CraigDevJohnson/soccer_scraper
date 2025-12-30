@@ -154,11 +154,11 @@ The email notification feature requires the following AWS resources:
 
 4. **EventBridge Scheduler** (for automatic schedule checking with timezone support):
    
-   The Lambda automatically detects EventBridge scheduled events and runs the `check-changes` logic. Use **AWS EventBridge Scheduler** (not EventBridge Rules) to run at exactly 3 AM and 3 PM Mountain Time year-round, automatically adjusting for Daylight Saving Time.
+   The Lambda automatically detects EventBridge scheduled events (from either EventBridge Scheduler or EventBridge Rules) and runs the `check-changes` logic. Use **AWS EventBridge Scheduler** (not EventBridge Rules) to run at exactly 3 AM and 3 PM Mountain Time year-round, automatically adjusting for Daylight Saving Time.
 
    **Using AWS EventBridge Scheduler (Recommended):**
    
-   EventBridge Scheduler supports timezone-aware scheduling, so the schedule will always run at the correct local time regardless of DST changes.
+   EventBridge Scheduler supports timezone-aware scheduling, so the schedule will always run at the correct local time regardless of DST changes. The Scheduler sends events with `source="aws.scheduler"` and `detail-type="Scheduled Event"`, which the Lambda automatically recognizes.
 
    ```bash
    # Create morning schedule (3 AM Mountain Time, every day)
