@@ -35,10 +35,9 @@ func init() {
 }
 
 // initHandler initializes the handler if it hasn't been initialized yet.
-// This allows tests to skip initialization by setting handler to a mock value.
 func initHandler() {
 	if handler != nil {
-		return // Already initialized (e.g., by tests)
+		return // Already initialized
 	}
 	var err error
 	handler, err = app.NewHandler()

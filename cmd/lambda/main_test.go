@@ -7,8 +7,10 @@ import (
 )
 
 // init sets environment variable to skip AWS service initialization during tests.
-// This init function in the test file runs before the main package's init function,
-// ensuring SKIP_LAMBDA_INIT is set before the main initialization logic executes.
+// In Go, init functions in test files typically execute before production code init
+// functions in the same package, allowing us to configure the environment before
+// the main package initialization runs. The SKIP_LAMBDA_INIT environment variable
+// is checked by the main package's init function to avoid AWS service initialization.
 func init() {
 	os.Setenv("SKIP_LAMBDA_INIT", "true")
 }
