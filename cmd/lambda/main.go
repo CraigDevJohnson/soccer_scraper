@@ -38,7 +38,8 @@ func init() {
 // ScheduledEvent represents an EventBridge scheduled event payload.
 // This is used to identify scheduled invocations vs. API Gateway requests.
 type ScheduledEvent struct {
-	// Source identifies EventBridge scheduled events (e.g., "aws.events")
+	// Source identifies EventBridge scheduled events.
+	// Can be "aws.scheduler" (EventBridge Scheduler) or "aws.events" (EventBridge Rules).
 	Source string `json:"source"`
 
 	// DetailType describes the event type (e.g., "Scheduled Event")
@@ -82,8 +83,11 @@ func handleRequest(ctx context.Context, rawEvent json.RawMessage) (interface{}, 
 		// expected source and detail-type values. Using logical AND here avoids
 		// misclassifying other event types (for example, API Gateway requests)
 		// that might coincidentally include one of these fields.
-		if scheduledEvent.Source == "aws.events" && scheduledEvent.DetailType == "Scheduled Event" {
-			log.Println("Detected EventBridge scheduled event, running check-changes")
+		// Accept both "aws.scheduler" (EventBridge Scheduler) and "aws.events" (EventBridge Rules).
+		isSchedulerEvent := (scheduledEvent.Source == "aws.scheduler" || scheduledEvent.Source == "aws.events") &&
+			scheduledEvent.DetailType == "Scheduled Event"
+		if isSchedulerEvent {
+			log.Printf("Detected EventBridge scheduled event (source=%q), running check-changes", scheduledEvent.Source)
 			return handleScheduledCheck(ctx)
 		}
 
