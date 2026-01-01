@@ -84,21 +84,29 @@ jobs:
                 echo "WARNING: Previous Lambda update FAILED"
                 echo "========================================="
                 
-                # Get detailed error information
-                error_code=$(aws lambda get-function \
+                # Get detailed error information in a single API call
+                function_details=$(aws lambda get-function \
                   --function-name ${function_name} \
                   --region ${AWS_REGION} \
-                  --query 'Configuration.LastUpdateStatusReasonCode' \
-                  --output text 2>/dev/null)
+                  --query 'Configuration.{Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
+                  --output json 2>/dev/null)
                 
-                error_reason=$(aws lambda get-function \
-                  --function-name ${function_name} \
-                  --region ${AWS_REGION} \
-                  --query 'Configuration.LastUpdateStatusReason' \
-                  --output text 2>/dev/null)
+                error_code=$(echo "$function_details" | grep -o '"Code":"[^"]*"' | cut -d'"' -f4)
+                error_reason=$(echo "$function_details" | grep -o '"Reason":"[^"]*"' | cut -d'"' -f4)
                 
-                echo "Error Code: ${error_code}"
-                echo "Error Reason: ${error_reason}"
+                # Display error information with null checks
+                if [ -n "$error_code" ] && [ "$error_code" != "None" ]; then
+                  echo "Error Code: ${error_code}"
+                else
+                  echo "Error Code: Not available"
+                fi
+                
+                if [ -n "$error_reason" ] && [ "$error_reason" != "None" ]; then
+                  echo "Error Reason: ${error_reason}"
+                else
+                  echo "Error Reason: Not available"
+                fi
+                
                 echo ""
                 echo "Risks of proceeding:"
                 echo "  - The Lambda function may be in an inconsistent state"
@@ -107,8 +115,8 @@ jobs:
                 echo "  - Underlying infrastructure or permission issues may persist"
                 echo ""
                 
-                # Check environment variable to determine behavior
-                if [ "${FAIL_ON_PREVIOUS_FAILURE}" = "true" ]; then
+                # Check environment variable to determine behavior (with default)
+                if [ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]; then
                   echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
                   echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
                   echo "========================================="
