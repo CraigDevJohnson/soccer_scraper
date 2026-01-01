@@ -86,10 +86,17 @@ jobs:
                 echo "Lambda function is ready!"
                 return 0
               elif [ "$status" = "Failed" ]; then
-                # LastUpdateStatus=Failed means a previous update failed, but we can attempt a new update
+                # LastUpdateStatus=Failed means the most recent *update operation* failed, but the
+                # function itself is still in a usable state (for example, State=Active). In this
+                # workflow we treat this as a recoverable condition and continue, because the next
+                # aws lambda update-function-code invocation will perform a **fresh** update using
+                # the newly built package (function.zip). It does NOT "retry" or resume the failed
+                # operation; each update-function-code call is independent.
+                #
                 # This is different from State=Failed, which means the function itself is broken
-                echo "Previous Lambda update failed. Proceeding with caution..."
-                echo "Note: The function is still operational, attempting new deployment"
+                # and cannot be executed; in that case we abort earlier and do not attempt deployment.
+                echo "Previous Lambda update failed (LastUpdateStatus=Failed). Proceeding with a fresh deployment attempt..."
+                echo "Note: Function state is not Failed; attempting a new update-function-code call with the newly built artifact."
                 return 0
               fi
               
