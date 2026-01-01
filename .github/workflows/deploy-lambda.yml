@@ -72,6 +72,12 @@ jobs:
               
               echo "Attempt $attempt/$max_attempts - State: $state, LastUpdateStatus: $status"
               
+              # Check critical failure states first
+              if [ "$state" = "Failed" ]; then
+                echo "ERROR: Lambda function is in Failed state. Cannot proceed with deployment."
+                return 1
+              fi
+              
               # Check if function is ready (Active state with Successful update)
               if [ "$status" = "Successful" ] && [ "$state" = "Active" ]; then
                 echo "Lambda function is ready!"
@@ -79,9 +85,6 @@ jobs:
               elif [ "$status" = "Failed" ]; then
                 echo "Previous Lambda update failed. Proceeding with caution..."
                 return 0
-              elif [ "$state" = "Failed" ]; then
-                echo "ERROR: Lambda function is in Failed state. Cannot proceed with deployment."
-                return 1
               fi
               
               # Handle known transitional states
