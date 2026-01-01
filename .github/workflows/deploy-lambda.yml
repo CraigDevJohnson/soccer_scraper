@@ -54,6 +54,8 @@ jobs:
             local wait_seconds=10
             local attempt=1
             local total_timeout=$((max_attempts * wait_seconds))
+            local status=""
+            local state=""
             
             echo "Checking if Lambda function is ready for updates..."
             
@@ -150,6 +152,12 @@ jobs:
               --zip-file fileb://function.zip \
               --region ${AWS_REGION} \
               --architectures ${LAMBDA_ARCH}
+            
+            # Wait for newly created function to be ready
+            echo "Waiting for newly created function to be ready..."
+            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+              echo "Warning: Lambda function may not be fully ready yet"
+            fi
           fi
           
           echo "Deployment successful!"
