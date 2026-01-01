@@ -56,6 +56,9 @@ jobs:
             local max_attempts=30
             local wait_seconds=10
             local attempt=1
+            local total_timeout=$((max_attempts * wait_seconds))
+            local status=""
+            local state=""
             
             echo "Checking if Lambda function is ready for updates..."
             
@@ -95,9 +98,24 @@ jobs:
               
               echo "Attempt $attempt/$max_attempts - State: $state, LastUpdateStatus: $status"
               
-              # Check if function is ready (not in progress)
-              if [ "$status" = "Successful" ] && [ "$state" = "Active" ]; then
-                echo "Lambda function is ready!"
+              # Check critical failure states first
+              if [[ "$state" == "Failed" ]]; then
+                # State=Failed indicates that the Lambda function itself is broken and cannot be updated safely from this workflow.
+                echo "ERROR: Lambda function is in Failed state. Cannot proceed with deployment from this workflow."
+                echo "This usually indicates a problem with the function configuration, VPC/network settings, or IAM permissions."
+                echo "Next steps: Inspect the function's CloudWatch Logs, verify the Lambda configuration (runtime, handler, environment variables),"
+                echo "           and review associated VPC subnets/security groups and IAM execution role in the AWS Console before retrying."
+                return 1
+              fi
+              
+              # Check if function is ready (Active state with Successful update or empty status for newly created functions)
+              # For newly created functions, LastUpdateStatus might be empty/not set yet
+              if [[ "$state" == "Active" && ( "$status" == "Successful" || -z "$status" ) ]]; then
+                if [[ -z "$status" ]]; then
+                  echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
+                else
+                  echo "Lambda function is ready!"
+                fi
                 return 0
               elif [ "$status" = "Failed" ]; then
                 echo "========================================="
@@ -133,12 +151,30 @@ jobs:
                 fi
               fi
               
-              echo "Lambda is busy (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              # Handle known transitional states
+              if [[ "$status" == "InProgress" ]]; then
+                echo "Lambda update is in progress (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              elif [[ "$state" == "Pending" ]]; then
+                echo "Lambda is in Pending state (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              elif [[ "$state" == "Inactive" ]]; then
+                echo "WARNING: Lambda function is Inactive. Waiting for it to become Active..."
+              else
+                # Log warning for unexpected states but continue waiting
+                echo "WARNING: Unexpected state combination (State: $state, Status: $status). Continuing to wait..."
+              fi
+              
               sleep $wait_seconds
               attempt=$((attempt + 1))
             done
             
-            echo "Timeout waiting for Lambda to be ready"
+            # Timeout reached while waiting for the Lambda function to become ready; provide detailed guidance for operator troubleshooting.
+            echo "ERROR: Timeout waiting for Lambda to be ready after ${total_timeout} seconds."
+            echo "Final observed Lambda state - State: $state, LastUpdateStatus: $status."
+            echo "Next steps:"
+            echo "  - Check the AWS Lambda console for function ${LAMBDA_FUNCTION_NAME} in region ${AWS_REGION} to confirm its current state."
+            echo "  - Verify that the Lambda execution role has the correct permissions and that recent configuration changes are valid."
+            echo "  - Inspect recent CloudWatch Logs for this function for initialization or deployment errors."
+            echo "  - If the function is stuck in Pending or Failed states, resolve any configuration or permission issues and then retry the deployment."
             return 1
           }
 
