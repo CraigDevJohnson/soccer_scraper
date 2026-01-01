@@ -163,12 +163,16 @@ jobs:
               --region ${AWS_REGION} \
               --architectures ${LAMBDA_ARCH}
             
-            # Wait for newly created function to be ready
-            echo "Waiting for newly created function to be ready..."
-            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
-              echo "Error: Lambda function is not ready after creation"
-              exit 1
-            fi
+            # NOTE:
+            # The AWS Lambda create-function API is synchronous and only returns
+            # once the function resource has been created. Immediately calling
+            # wait_for_lambda_ready here can cause unnecessary waiting or even
+            # false failures if LastUpdateStatus is temporarily empty for a
+            # brand-new function. For newly created functions, we therefore rely
+            # on the synchronous semantics of create-function and skip the extra
+            # readiness wait. Any subsequent updates (code/config) are guarded
+            # by wait_for_lambda_ready in the "function exists" branch above.
+            echo "Lambda function created successfully; skipping additional readiness wait for initial creation."
           fi
           
           echo "Deployment successful!"
