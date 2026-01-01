@@ -84,17 +84,35 @@ jobs:
                 echo "WARNING: Previous Lambda update FAILED"
                 echo "========================================="
                 
-                # Get detailed error information in a single API call
-                # Note: jq is pre-installed on GitHub-hosted runners
+                # Get detailed error information in a single API call.
+                # Note: jq is pre-installed on GitHub-hosted runners.
                 function_details=$(aws lambda get-function \
                   --function-name ${function_name} \
                   --region ${AWS_REGION} \
                   --query 'Configuration.{Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
                   --output json 2>/dev/null)
                 
-                # Parse JSON using jq with fallback values
-                error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
-                error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
+                # Defensive parsing of function_details to avoid silent jq failures.
+                # This adds explicit debugging so that AWS CLI or JSON issues are visible in logs.
+                if [ -z "$function_details" ]; then
+                  echo "ERROR: Unable to retrieve Lambda function details (empty response from aws lambda get-function)." >&2
+                  echo "DEBUG: function_name='${function_name}', region='${AWS_REGION}'" >&2
+                  error_code="Not available (function details response was empty)"
+                  error_reason="Failed to retrieve Lambda configuration details; check AWS CLI permissions, region, and function name."
+                else
+                  # Validate that the response is valid JSON before attempting to extract fields.
+                  if ! echo "$function_details" | jq empty >/dev/null 2>&1; then
+                    echo "ERROR: Received invalid JSON when retrieving Lambda function details." >&2
+                    echo "DEBUG: Raw function_details payload:" >&2
+                    echo "$function_details" >&2
+                    error_code="Not available (invalid JSON from aws lambda get-function)"
+                    error_reason="Failed to parse Lambda details JSON; ensure AWS CLI output format and jq are working correctly."
+                  else
+                    # Parse JSON using jq with fallback values when keys are missing.
+                    error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
+                    error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
+                  fi
+                fi
                 
                 # Display error information
                 echo "Error Code: ${error_code}"
