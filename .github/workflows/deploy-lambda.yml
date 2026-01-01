@@ -131,6 +131,18 @@ jobs:
               --zip-file fileb://function.zip \
               --region ${AWS_REGION} \
               --architectures ${LAMBDA_ARCH}
+
+            # Debugging: Log that we are now waiting for the newly created Lambda function
+            # to transition into a ready/Active state before declaring deployment success.
+            echo "Create operation completed, waiting for Lambda to become ready..."
+
+            # After creating the Lambda function, explicitly wait for it to reach
+            # a ready state. This mirrors the update path behavior and prevents us
+            # from reporting success while the function is still provisioning or failed.
+            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+              echo "Error: Lambda function did not become ready after creation"
+              exit 1
+            fi
           fi
           
           echo "Deployment successful!"
