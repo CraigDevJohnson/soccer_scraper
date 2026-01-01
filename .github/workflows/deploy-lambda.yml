@@ -93,8 +93,10 @@ jobs:
               fi
               
               # Handle known transitional states
-              if [ "$status" = "InProgress" ] || [ "$state" = "Pending" ]; then
-                echo "Lambda is in transitional state (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              if [ "$status" = "InProgress" ]; then
+                echo "Lambda update is in progress (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              elif [ "$state" = "Pending" ]; then
+                echo "Lambda is in Pending state (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
               elif [ "$state" = "Inactive" ]; then
                 echo "WARNING: Lambda function is Inactive. Waiting for it to become Active..."
               else
@@ -156,7 +158,8 @@ jobs:
             # Wait for newly created function to be ready
             echo "Waiting for newly created function to be ready..."
             if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
-              echo "Warning: Lambda function may not be fully ready yet"
+              echo "Error: Lambda function is not ready after creation"
+              exit 1
             fi
           fi
           
