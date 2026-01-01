@@ -91,22 +91,13 @@ jobs:
                   --query 'Configuration.{Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
                   --output json 2>/dev/null)
                 
-                error_code=$(echo "$function_details" | grep -o '"Code":"[^"]*"' | cut -d'"' -f4)
-                error_reason=$(echo "$function_details" | grep -o '"Reason":"[^"]*"' | cut -d'"' -f4)
+                # Parse JSON using jq with fallback values
+                error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
+                error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
                 
-                # Display error information with null checks
-                if [ -n "$error_code" ] && [ "$error_code" != "None" ]; then
-                  echo "Error Code: ${error_code}"
-                else
-                  echo "Error Code: Not available"
-                fi
-                
-                if [ -n "$error_reason" ] && [ "$error_reason" != "None" ]; then
-                  echo "Error Reason: ${error_reason}"
-                else
-                  echo "Error Reason: Not available"
-                fi
-                
+                # Display error information
+                echo "Error Code: ${error_code}"
+                echo "Error Reason: ${error_reason}"
                 echo ""
                 echo "Risks of proceeding:"
                 echo "  - The Lambda function may be in an inconsistent state"
