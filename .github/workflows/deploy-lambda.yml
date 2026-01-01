@@ -85,13 +85,14 @@ jobs:
                 return 1
               fi
               
-              # Check if function is ready (Active state with Successful update)
-              # For newly created functions, LastUpdateStatus might be empty/not set yet, so we also check for Active state with empty status
-              if [[ "$status" == "Successful" && "$state" == "Active" ]]; then
-                echo "Lambda function is ready!"
-                return 0
-              elif [[ "$state" == "Active" && -z "$status" ]]; then
-                echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
+              # Check if function is ready (Active state with Successful update or empty status for newly created functions)
+              # For newly created functions, LastUpdateStatus might be empty/not set yet
+              if [[ "$state" == "Active" && ( "$status" == "Successful" || -z "$status" ) ]]; then
+                if [[ -z "$status" ]]; then
+                  echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
+                else
+                  echo "Lambda function is ready!"
+                fi
                 return 0
               elif [[ "$status" == "Failed" ]]; then
                 # LastUpdateStatus=Failed means the most recent *update operation* failed, but the
