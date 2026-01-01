@@ -53,6 +53,7 @@ jobs:
             local max_attempts=30
             local wait_seconds=10
             local attempt=1
+            local total_timeout=$((max_attempts * wait_seconds))
             
             echo "Checking if Lambda function is ready for updates..."
             
@@ -83,6 +84,8 @@ jobs:
                 echo "Lambda function is ready!"
                 return 0
               elif [ "$status" = "Failed" ]; then
+                # LastUpdateStatus=Failed means a previous update failed, but we can attempt a new update
+                # This is different from State=Failed, which means the function itself is broken
                 echo "Previous Lambda update failed. Proceeding with caution..."
                 return 0
               fi
@@ -101,7 +104,7 @@ jobs:
               attempt=$((attempt + 1))
             done
             
-            echo "ERROR: Timeout waiting for Lambda to be ready after $((max_attempts * wait_seconds)) seconds"
+            echo "ERROR: Timeout waiting for Lambda to be ready after ${total_timeout} seconds"
             echo "Final state - State: $state, LastUpdateStatus: $status"
             return 1
           }
