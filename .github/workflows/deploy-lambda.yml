@@ -12,6 +12,9 @@ env:
   LAMBDA_MEMORY: 128
   LAMBDA_RUNTIME: provided.al2023
   LAMBDA_TIMEOUT: 30
+  # Set to 'true' to fail deployment if previous Lambda update failed
+  # Set to 'false' to proceed with caution (may mask underlying issues)
+  FAIL_ON_PREVIOUS_FAILURE: true
 
 permissions:
   id-token: write
@@ -77,8 +80,45 @@ jobs:
                 echo "Lambda function is ready!"
                 return 0
               elif [ "$status" = "Failed" ]; then
-                echo "Previous Lambda update failed. Proceeding with caution..."
-                return 0
+                echo "========================================="
+                echo "WARNING: Previous Lambda update FAILED"
+                echo "========================================="
+                
+                # Get detailed error information
+                error_code=$(aws lambda get-function \
+                  --function-name ${function_name} \
+                  --region ${AWS_REGION} \
+                  --query 'Configuration.LastUpdateStatusReasonCode' \
+                  --output text 2>/dev/null)
+                
+                error_reason=$(aws lambda get-function \
+                  --function-name ${function_name} \
+                  --region ${AWS_REGION} \
+                  --query 'Configuration.LastUpdateStatusReason' \
+                  --output text 2>/dev/null)
+                
+                echo "Error Code: ${error_code}"
+                echo "Error Reason: ${error_reason}"
+                echo ""
+                echo "Risks of proceeding:"
+                echo "  - The Lambda function may be in an inconsistent state"
+                echo "  - Previous deployment issues may not be resolved"
+                echo "  - New deployment could fail or behave unexpectedly"
+                echo "  - Underlying infrastructure or permission issues may persist"
+                echo ""
+                
+                # Check environment variable to determine behavior
+                if [ "${FAIL_ON_PREVIOUS_FAILURE}" = "true" ]; then
+                  echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
+                  echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
+                  echo "========================================="
+                  return 1
+                else
+                  echo "FAIL_ON_PREVIOUS_FAILURE is set to 'false'. Proceeding with deployment."
+                  echo "NOTE: This may mask underlying issues. Consider investigating the failure."
+                  echo "========================================="
+                  return 0
+                fi
               fi
               
               echo "Lambda is busy (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
