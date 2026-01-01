@@ -77,7 +77,11 @@ jobs:
               
               # Check critical failure states first
               if [ "$state" = "Failed" ]; then
-                echo "ERROR: Lambda function is in Failed state. Cannot proceed with deployment."
+                # State=Failed indicates that the Lambda function itself is broken and cannot be updated safely from this workflow.
+                echo "ERROR: Lambda function is in Failed state. Cannot proceed with deployment from this workflow."
+                echo "This usually indicates a problem with the function configuration, VPC/network settings, or IAM permissions."
+                echo "Next steps: Inspect the function's CloudWatch Logs, verify the Lambda configuration (runtime, handler, environment variables),"
+                echo "           and review associated VPC subnets/security groups and IAM execution role in the AWS Console before retrying."
                 return 1
               fi
               
