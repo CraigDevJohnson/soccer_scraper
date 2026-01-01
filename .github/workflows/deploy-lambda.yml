@@ -12,6 +12,9 @@ env:
   LAMBDA_MEMORY: 128
   LAMBDA_RUNTIME: provided.al2023
   LAMBDA_TIMEOUT: 30
+  # Set to 'true' to fail deployment if previous Lambda update failed
+  # Set to 'false' to proceed with caution (may mask underlying issues)
+  FAIL_ON_PREVIOUS_FAILURE: true
 
 permissions:
   id-token: write
@@ -59,19 +62,39 @@ jobs:
             
             echo "Checking if Lambda function is ready for updates..."
             
-            while [[ $attempt -le $max_attempts ]]; do
-              # Get the LastUpdateStatus of the function
-              status=$(aws lambda get-function \
+            while [ $attempt -le $max_attempts ]; do
+              # Get all necessary Lambda function details in a single API call
+              # Note: jq is pre-installed on GitHub-hosted runners
+              function_details=$(aws lambda get-function \
                 --function-name ${function_name} \
                 --region ${AWS_REGION} \
-                --query 'Configuration.LastUpdateStatus' \
-                --output text 2>/dev/null)
+                --query 'Configuration.{Status:LastUpdateStatus,State:State,Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
+                --output json 2>/dev/null)
               
-              state=$(aws lambda get-function \
-                --function-name ${function_name} \
-                --region ${AWS_REGION} \
-                --query 'Configuration.State' \
-                --output text 2>/dev/null)
+              # Defensive parsing of function_details to avoid silent jq failures
+              if [ -z "$function_details" ]; then
+                echo "ERROR: Unable to retrieve Lambda function details (empty response from aws lambda get-function)." >&2
+                echo "DEBUG: function_name='${function_name}', region='${AWS_REGION}'" >&2
+                echo "Attempt $attempt/$max_attempts - Unable to retrieve function details"
+                sleep $wait_seconds
+                attempt=$((attempt + 1))
+                continue
+              fi
+              
+              # Validate that the response is valid JSON before attempting to extract fields
+              if ! echo "$function_details" | jq empty >/dev/null 2>&1; then
+                echo "ERROR: Received invalid JSON when retrieving Lambda function details." >&2
+                echo "DEBUG: Raw function_details payload:" >&2
+                echo "$function_details" >&2
+                echo "Attempt $attempt/$max_attempts - Invalid JSON response"
+                sleep $wait_seconds
+                attempt=$((attempt + 1))
+                continue
+              fi
+              
+              # Parse all fields from the single API call
+              status=$(echo "$function_details" | jq -r '.Status // "Unknown"')
+              state=$(echo "$function_details" | jq -r '.State // "Unknown"')
               
               echo "Attempt $attempt/$max_attempts - State: $state, LastUpdateStatus: $status"
               
@@ -94,19 +117,38 @@ jobs:
                   echo "Lambda function is ready!"
                 fi
                 return 0
-              elif [[ "$status" == "Failed" ]]; then
-                # LastUpdateStatus=Failed means the most recent *update operation* failed, but the
-                # function itself is still in a usable state (for example, State=Active). In this
-                # workflow we treat this as a recoverable condition and continue, because the next
-                # aws lambda update-function-code invocation will perform a **fresh** update using
-                # the newly built package (function.zip). It does NOT "retry" or resume the failed
-                # operation; each update-function-code call is independent.
-                #
-                # This is different from State=Failed, which means the function itself is broken
-                # and cannot be executed; in that case we abort earlier and do not attempt deployment.
-                echo "Previous Lambda update failed (LastUpdateStatus=Failed). Proceeding with a fresh deployment attempt..."
-                echo "Note: Function state is not Failed; attempting a new update-function-code call with the newly built artifact."
-                return 0
+              elif [ "$status" = "Failed" ]; then
+                echo "========================================="
+                echo "WARNING: Previous Lambda update FAILED"
+                echo "========================================="
+                
+                # Extract error details from the same API call result
+                error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
+                error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
+                
+                # Display error information
+                echo "Error Code: ${error_code}"
+                echo "Error Reason: ${error_reason}"
+                echo ""
+                echo "Risks of proceeding:"
+                echo "  - The Lambda function may be in an inconsistent state"
+                echo "  - Previous deployment issues may not be resolved"
+                echo "  - New deployment could fail or behave unexpectedly"
+                echo "  - Underlying infrastructure or permission issues may persist"
+                echo ""
+                
+                # Check environment variable to determine behavior (with default)
+                if [ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]; then
+                  echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
+                  echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
+                  echo "========================================="
+                  return 1
+                else
+                  echo "FAIL_ON_PREVIOUS_FAILURE is set to 'false'. Proceeding with deployment."
+                  echo "NOTE: This may mask underlying issues. Consider investigating the failure."
+                  echo "========================================="
+                  return 0
+                fi
               fi
               
               # Handle known transitional states
@@ -177,17 +219,18 @@ jobs:
               --zip-file fileb://function.zip \
               --region ${AWS_REGION} \
               --architectures ${LAMBDA_ARCH}
-            
-            # NOTE:
-            # The AWS Lambda create-function API is synchronous and only returns
-            # once the function resource has been created. Immediately calling
-            # wait_for_lambda_ready here can cause unnecessary waiting or even
-            # false failures if LastUpdateStatus is temporarily empty for a
-            # brand-new function. For newly created functions, we therefore rely
-            # on the synchronous semantics of create-function and skip the extra
-            # readiness wait. Any subsequent updates (code/config) are guarded
-            # by wait_for_lambda_ready in the "function exists" branch above.
-            echo "Lambda function created successfully; skipping additional readiness wait for initial creation."
+
+            # Debugging: Log that we are now waiting for the newly created Lambda function
+            # to transition into a ready/Active state before declaring deployment success.
+            echo "Create operation completed, waiting for Lambda to become ready..."
+
+            # After creating the Lambda function, explicitly wait for it to reach
+            # a ready state. This mirrors the update path behavior and prevents us
+            # from reporting success while the function is still provisioning or failed.
+            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+              echo "Error: Lambda function did not become ready after creation"
+              exit 1
+            fi
           fi
           
           echo "Deployment successful!"
