@@ -50,6 +50,17 @@ jobs:
 
       - name: Deploy to Lambda
         run: |
+          # Enable strict error handling for the deployment script to ensure that
+          # any failure immediately stops the workflow instead of continuing in a
+          # partially failed or inconsistent state.
+          #   -e : Exit immediately if any command exits with a non-zero status.
+          #   -u : Treat unset variables as errors to avoid subtle typos and logic bugs.
+          #   -o pipefail : Propagate failures from any command within a pipeline.
+          set -euo pipefail
+
+          # Debugging tip: Uncomment the following line to enable command tracing
+          # during troubleshooting. This will print each command before it runs.
+          # set -x
           # Function to wait for Lambda to be in a ready state
           # 
           # This function polls the Lambda function status and state to determine if it's ready
