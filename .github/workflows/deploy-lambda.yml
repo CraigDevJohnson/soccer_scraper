@@ -362,7 +362,10 @@ jobs:
               --memory-size "${LAMBDA_MEMORY}" \
               --zip-file fileb://function.zip \
               --region "${AWS_REGION}" \
-              --architectures "${LAMBDA_ARCH}"
+              # Explicitly pass architectures as a JSON list to match AWS CLI's list-parameter expectations.
+              # This avoids ambiguity across AWS CLI versions and makes the list nature of the flag clear,
+              # while still allowing LAMBDA_ARCH (typically "arm64") to control the architecture value.
+              --architectures "[\"${LAMBDA_ARCH}\"]"
 
             # Debugging: Log that we are now waiting for the newly created Lambda function
             # to transition into a ready/Active state before declaring deployment success.
