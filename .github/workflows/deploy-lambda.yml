@@ -89,21 +89,45 @@ jobs:
               # Use quoted variables here to avoid word splitting and globbing issues
               # if the function name or AWS region were ever to contain spaces or
               # shell metacharacters. This is a defensive best practice for bash.
+              # 
+              # Capture stderr to detect ResourceNotFoundException and fail fast instead of
+              # retrying for 5 minutes when the function has been deleted.
+              local stderr_output
+              stderr_output=$(mktemp)
               function_details=$(aws lambda get-function \
                 --function-name "${function_name}" \
                 --region "${AWS_REGION}" \
                 --query 'Configuration.{Status:LastUpdateStatus,State:State,Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
-                --output json 2>/dev/null)
+                --output json 2>"$stderr_output")
+              local aws_exit_code=$?
               
               # Defensive parsing of function_details to avoid silent jq failures
               if [[ -z "$function_details" ]]; then
+                # Check if the function was deleted (ResourceNotFoundException)
+                if grep -q "ResourceNotFoundException" "$stderr_output"; then
+                  echo "ERROR: Lambda function '${function_name}' not found (ResourceNotFoundException)." >&2
+                  echo "The function may have been deleted between the existence check and this call." >&2
+                  echo "This is likely a race condition or the function was deleted externally." >&2
+                  rm -f "$stderr_output"
+                  return 1
+                fi
+                
+                # For other errors, log details and continue retrying (transient API failures)
                 echo "ERROR: Unable to retrieve Lambda function details (empty response from aws lambda get-function)." >&2
-                echo "DEBUG: function_name='${function_name}', region='${AWS_REGION}'" >&2
+                echo "DEBUG: function_name='${function_name}', region='${AWS_REGION}', exit_code=${aws_exit_code}" >&2
+                if [[ -s "$stderr_output" ]]; then
+                  echo "DEBUG: stderr output:" >&2
+                  cat "$stderr_output" >&2
+                fi
                 echo "Attempt $attempt/$max_attempts - Unable to retrieve function details"
+                rm -f "$stderr_output"
                 sleep $wait_seconds
                 attempt=$((attempt + 1))
                 continue
               fi
+              
+              # Clean up temp file
+              rm -f "$stderr_output"
               
               # Validate that the response is valid JSON before attempting to extract fields
               if ! echo "$function_details" | jq empty >/dev/null 2>&1; then
