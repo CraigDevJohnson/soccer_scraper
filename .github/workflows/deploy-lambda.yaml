@@ -1,0 +1,52 @@
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  
+env:
+  AWS_REGION: us-west-2
+  LAMBDA_ARCH: arm64
+  LAMBDA_FUNCTION_NAME: soccer_schedule_scraper
+  LAMBDA_MEMORY: 128
+  LAMBDA_RUNTIME: provided.al2023
+  LAMBDA_TIMEOUT: 30
+  FAIL_ON_PREVIOUS_FAILURE: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+
+      - name: Build Lambda Binary
+        run: |
+          # Output binary must be named 'bootstrap' for provided.al2023 runtime
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap ./cmd/lambda
+
+      - name: Package Lambda
+        run: |
+          zip function.zip bootstrap
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to Lambda
+        run: |
+          chmod +x ./scripts/deploy-lambda.sh
+          ./scripts/deploy-lambda.sh ${{ secrets.LAMBDA_ROLE_ARN }}

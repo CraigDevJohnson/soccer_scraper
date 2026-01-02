@@ -11,9 +11,6 @@ import (
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/types"
 
-	// Embed timezone data for reliable America/Denver loading in Lambda
-	_ "time/tzdata"
-
 	ics "github.com/arran4/golang-ical"
 )
 
