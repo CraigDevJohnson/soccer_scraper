@@ -197,33 +197,33 @@ jobs:
           }
 
           # Check if Lambda function exists
-          if aws lambda get-function --function-name ${LAMBDA_FUNCTION_NAME} --region ${AWS_REGION} &>/dev/null; then
+          if aws lambda get-function --function-name "${LAMBDA_FUNCTION_NAME}" --region "${AWS_REGION}" &>/dev/null; then
             echo "Function exists, checking readiness..."
             
             # Wait for Lambda to be ready before updating
-            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
               echo "Error: Lambda function is not ready for updates after waiting"
               exit 1
             fi
             
             echo "Updating code..."
             aws lambda update-function-code \
-              --function-name ${LAMBDA_FUNCTION_NAME} \
+              --function-name "${LAMBDA_FUNCTION_NAME}" \
               --zip-file fileb://function.zip \
-              --region ${AWS_REGION}
+              --region "${AWS_REGION}"
             
             # Wait again after code update before configuration update
-            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
               echo "Error: Lambda function is not ready after code update"
               exit 1
             fi
             
             echo "Updating function configuration..."
             aws lambda update-function-configuration \
-              --function-name ${LAMBDA_FUNCTION_NAME} \
-              --timeout ${LAMBDA_TIMEOUT} \
-              --memory-size ${LAMBDA_MEMORY} \
-              --region ${AWS_REGION}
+              --function-name "${LAMBDA_FUNCTION_NAME}" \
+              --timeout "${LAMBDA_TIMEOUT}" \
+              --memory-size "${LAMBDA_MEMORY}" \
+              --region "${AWS_REGION}"
 
             # Debugging: Log that we are now waiting for the Lambda function
             # to transition back into a ready/Active state after the configuration
