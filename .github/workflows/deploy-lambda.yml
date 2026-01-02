@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  
+env:
+  AWS_REGION: us-west-2
+  LAMBDA_ARCH: arm64
+  LAMBDA_FUNCTION_NAME: soccer_schedule_scraper
+  LAMBDA_MEMORY: 128
+  LAMBDA_RUNTIME: provided.al2023
+  LAMBDA_TIMEOUT: 30
+  # Set to 'true' to fail deployment if previous Lambda update failed
+  # Set to 'false' to proceed with caution (may mask underlying issues)
+  FAIL_ON_PREVIOUS_FAILURE: true
 
 permissions:
   id-token: write
@@ -13,13 +24,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
-          cache: true
 
       - name: Build Lambda Binary
         run: |
@@ -35,8 +46,406 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to Lambda
         run: |
-          aws lambda update-function-code --function-name soccer_schedule_scraper --zip-file fileb://function.zip
+          # Enable strict error handling for the deployment script to ensure that
+          # any failure immediately stops the workflow instead of continuing in a
+          # partially failed or inconsistent state.
+          #   -e : Exit immediately if any command exits with a non-zero status.
+          #   -u : Treat unset variables as errors to avoid subtle typos and logic bugs.
+          #   -o pipefail : Propagate failures from any command within a pipeline.
+          set -euo pipefail
+
+          # Debugging tip: Uncomment the following line to enable command tracing
+          # during troubleshooting. This will print each command before it runs.
+          # set -x
+          # Function to wait for Lambda to be in a ready state
+          # 
+          # This function polls the Lambda function status and state to determine if it's ready
+          # for deployment operations (code/configuration updates).
+          # 
+          # Environment variable dependencies:
+          #   - FAIL_ON_PREVIOUS_FAILURE: Controls behavior when encountering a previously failed
+          #     Lambda update (LastUpdateStatus=Failed). If set to 'true' (default), the function
+          #     returns an error and aborts deployment. If set to 'false', the function proceeds
+          #     with a warning, allowing deployment to continue despite the prior failure.
+          #     This variable is defined at the workflow level (see env section).
+          wait_for_lambda_ready() {
+            local function_name=$1
+            local max_attempts=30
+            local wait_seconds=10
+            local attempt=1
+            local total_timeout=$((max_attempts * wait_seconds))
+            local status=""
+            local state=""
+            local stderr_output=""
+            
+            # Set up trap to ensure temp file cleanup on function exit
+            cleanup_temp_file() {
+              if [[ -n "$stderr_output" && -f "$stderr_output" ]]; then
+                rm -f "$stderr_output"
+              fi
+            }
+            trap cleanup_temp_file RETURN
+            
+            echo "Checking if Lambda function is ready for updates..."
+            
+            while [[ $attempt -le $max_attempts ]]; do
+              # Get all necessary Lambda function details in a single API call.
+              # Note: jq is pre-installed on GitHub-hosted runners.
+              # Use quoted variables here to avoid word splitting and globbing issues
+              # if the function name or AWS region were ever to contain spaces or
+              # shell metacharacters. This is a defensive best practice for bash.
+              # 
+              # Capture stderr to detect ResourceNotFoundException and fail fast instead of
+              # retrying for 5 minutes when the function has been deleted.
+              stderr_output=$(mktemp)
+              function_details=$(aws lambda get-function \
+                --function-name "${function_name}" \
+                --region "${AWS_REGION}" \
+                --query 'Configuration.{Status:LastUpdateStatus,State:State,Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
+                --output json 2>"$stderr_output")
+              local aws_exit_code=$?
+              
+              # Defensive parsing of function_details to avoid silent jq failures
+              if [[ -z "$function_details" ]]; then
+                # Check if the function was deleted (ResourceNotFoundException)
+                if grep -q "ResourceNotFoundException" "$stderr_output"; then
+                  echo "ERROR: Lambda function '${function_name}' not found (ResourceNotFoundException)." >&2
+                  echo "The function may have been deleted between the existence check and this call." >&2
+                  echo "This is likely a race condition or the function was deleted externally." >&2
+                  return 1
+                fi
+                
+                # For other errors, log details and continue retrying (transient API failures)
+                echo "ERROR: Unable to retrieve Lambda function details (empty response from aws lambda get-function)." >&2
+                echo "DEBUG: function_name='${function_name}', region='${AWS_REGION}', exit_code=${aws_exit_code}" >&2
+                if [[ -s "$stderr_output" ]]; then
+                  echo "DEBUG: stderr output:" >&2
+                  cat "$stderr_output" >&2
+                fi
+                echo "Attempt $attempt/$max_attempts - Unable to retrieve function details"
+                sleep $wait_seconds
+                attempt=$((attempt + 1))
+                continue
+              fi
+              
+              # Validate that the response is valid JSON before attempting to extract fields
+              if ! echo "$function_details" | jq empty >/dev/null 2>&1; then
+                echo "ERROR: Received invalid JSON when retrieving Lambda function details." >&2
+                echo "DEBUG: Raw function_details payload:" >&2
+                echo "$function_details" >&2
+                echo "Attempt $attempt/$max_attempts - Invalid JSON response"
+                sleep $wait_seconds
+                attempt=$((attempt + 1))
+                continue
+              fi
+              
+              # Parse all fields from the single API call
+              status=$(echo "$function_details" | jq -r '.Status // "Unknown"')
+              state=$(echo "$function_details" | jq -r '.State // "Unknown"')
+              
+              echo "Attempt $attempt/$max_attempts - State: $state, LastUpdateStatus: $status"
+              
+              # Check critical failure states first
+              if [[ "$state" == "Failed" ]]; then
+                # State=Failed indicates that the Lambda function itself is broken and cannot be updated safely from this workflow.
+                echo "ERROR: Lambda function is in Failed state. Cannot proceed with deployment from this workflow."
+                echo "This usually indicates a problem with the function configuration, VPC/network settings, or IAM permissions."
+                echo "Next steps: Inspect the function's CloudWatch Logs, verify the Lambda configuration (runtime, handler, environment variables),"
+                echo "           and review associated VPC subnets/security groups and IAM execution role in the AWS Console before retrying."
+                return 1
+              fi
+              
+              # Check if function is ready (Active state with Successful update or Unknown status for newly created functions)
+              # For newly created functions, LastUpdateStatus might be missing/null (parsed as "Unknown")
+              # First, require the Lambda function to be in an Active state before making any
+              # readiness or previous-failure decisions. This avoids treating transitional
+              # states (e.g., Pending, InProgress) as if a prior update had definitively failed.
+              if [[ "$state" == "Active" ]]; then
+                # When the function is Active with a Successful or Unknown LastUpdateStatus,
+                # we consider it fully ready for deployment.
+                if [[ "$status" == "Successful" || "$status" == "Unknown" ]]; then
+                  if [[ "$status" == "Unknown" ]]; then
+                    echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
+                  else
+                    echo "Lambda function is ready!"
+                  fi
+                  return 0
+                elif [[ "$status" == "Failed" ]]; then
+                  # Only when the function is Active and the LastUpdateStatus is Failed do we
+                  # treat this as a previous Lambda update failure. This prevents misleading
+                  # error messages when the function is still in a non-Active transitional state.
+                  echo "========================================="
+                  echo "WARNING: Previous Lambda update FAILED (State: $state, Status: $status)"
+                  echo "========================================="
+                  
+                  # Extract error details from the same API call result for verbose debugging.
+                  error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
+                  error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
+                  
+                  # Display error information to aid troubleshooting.
+                  echo "Error Code: ${error_code}"
+                  echo "Error Reason: ${error_reason}"
+                  echo ""
+                  echo "Risks of proceeding:"
+                  echo "  - The Lambda function may be in an inconsistent state"
+                  echo "  - Previous deployment issues may not be resolved"
+                  echo "  - New deployment could fail or behave unexpectedly"
+                  echo "  - Underlying infrastructure or permission issues may persist"
+                  echo ""
+                  
+                  # Check environment variable to determine behavior (with default).
+                  # This allows deployments to optionally proceed despite a known prior failure.
+                  if [[ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]]; then
+                    echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
+                    echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
+                    echo "========================================="
+                    return 1
+                  else
+                    echo "FAIL_ON_PREVIOUS_FAILURE is set to 'false'. Proceeding with deployment."
+                    echo "NOTE: This may mask underlying issues. Consider investigating the failure."
+                    echo "========================================="
+                    return 0
+                  fi
+                else
+                  # Active state with an unexpected LastUpdateStatus. Log verbosely and allow the
+                  # outer loop to continue waiting rather than making incorrect assumptions.
+                  echo "DEBUG: Active Lambda function has unexpected LastUpdateStatus (State: $state, Status: $status). Continuing to wait..."
+                fi
+              fi
+              
+              # Handle known transitional states
+              if [[ "$status" == "InProgress" ]]; then
+                echo "Lambda update is in progress (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              elif [[ "$state" == "Pending" ]]; then
+                echo "Lambda is in Pending state (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
+              elif [[ "$state" == "Inactive" ]]; then
+                # INFO: Inactive indicates the function has not been invoked recently (i.e., it may be cold),
+                # and does not block configuration or code updates. We log this for operator visibility but
+                # still rely on LastUpdateStatus and other state checks above to decide readiness.
+                echo "INFO: Lambda function is currently Inactive (this is not a deployment blocker). Continuing to poll until the last update completes or times out..."
+              else
+                # Log warning for unexpected states but continue waiting
+                echo "WARNING: Unexpected state combination (State: $state, Status: $status). Continuing to wait..."
+              fi
+              
+              sleep $wait_seconds
+              attempt=$((attempt + 1))
+            done
+            
+            # Timeout reached while waiting for the Lambda function to become ready; provide detailed guidance for operator troubleshooting.
+            echo "ERROR: Timeout waiting for Lambda to be ready after ${total_timeout} seconds."
+            echo "Final observed Lambda state - State: $state, LastUpdateStatus: $status."
+            echo "Next steps:"
+            echo "  - Check the AWS Lambda console for function \"${function_name}\" in region \"${AWS_REGION}\" to confirm its current state."
+            echo "  - Verify that the Lambda execution role has the correct permissions and that recent configuration changes are valid."
+            echo "  - Inspect recent CloudWatch Logs for this function for initialization or deployment errors."
+            echo "  - If the function is stuck in Pending or Failed states, resolve any configuration or permission issues and then retry the deployment."
+            return 1
+          }
+
+          # Check if Lambda function exists
+          if aws lambda get-function --function-name "${LAMBDA_FUNCTION_NAME}" --region "${AWS_REGION}" &>/dev/null; then
+            echo "Function exists, checking readiness..."
+            
+            # Wait for Lambda to be ready before updating
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            trap 'rm -f "$error_output"' EXIT
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted during deployment."
+                echo "The function existed at the start but is now missing. This may indicate concurrent deployments or manual deletion."
+                exit 1
+              fi
+              echo "Error: Lambda function is not ready for updates after waiting"
+              exit 1
+            fi
+            trap - EXIT
+            rm -f "$error_output"
+            
+            echo "Updating code..."
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            trap 'rm -f "$error_output"' EXIT
+            if ! aws lambda update-function-code \
+              --function-name "${LAMBDA_FUNCTION_NAME}" \
+              --zip-file fileb://function.zip \
+              --region "${AWS_REGION}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted before code update."
+                echo "The function was ready but is now missing. This may indicate concurrent deployments or manual deletion."
+                exit 1
+              fi
+              echo "ERROR: Failed to update function code. Details:"
+              cat "$error_output"
+              exit 1
+            fi
+            trap - EXIT
+            rm -f "$error_output"
+            
+            # Wait again after code update before configuration update
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            trap 'rm -f "$error_output"' EXIT
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted after code update."
+                echo "The function completed code update but is now missing. This may indicate concurrent deployments or manual deletion."
+                exit 1
+              fi
+              echo "Error: Lambda function is not ready after code update"
+              exit 1
+            fi
+            trap - EXIT
+            rm -f "$error_output"
+            
+            echo "Updating function configuration..."
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            trap 'rm -f "$error_output"' EXIT
+            if ! aws lambda update-function-configuration \
+              --function-name "${LAMBDA_FUNCTION_NAME}" \
+              --timeout "${LAMBDA_TIMEOUT}" \
+              --memory-size "${LAMBDA_MEMORY}" \
+              --runtime "${LAMBDA_RUNTIME}" \
+              --handler bootstrap \
+              --region "${AWS_REGION}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted before configuration update."
+                echo "The function was ready after code update but is now missing. This may indicate concurrent deployments or manual deletion."
+                exit 1
+              fi
+              echo "ERROR: Failed to update function configuration. Details:"
+              cat "$error_output"
+              exit 1
+            fi
+            trap - EXIT
+            rm -f "$error_output"
+
+            # Debugging: Log that we are now waiting for the Lambda function
+            # to transition back into a ready/Active state after the configuration
+            # update. The update-function-configuration API is asynchronous, so
+            # skipping this wait could cause us to report success while the
+            # function is still updating or has failed the new configuration.
+            echo "Configuration update initiated, waiting for Lambda to become ready..."
+
+            # Final readiness check for the existing Lambda function after applying
+            # configuration changes. This mirrors the post-creation readiness check
+            # in the 'create-function' branch and ensures consistent deployment
+            # semantics across both paths.
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            # Helper function to execute a Lambda-related command with consistent
+            # error handling, temporary stderr capture, and cleanup semantics.
+            # This function is intentionally verbose and instrumented for debugging
+            # to make deployment issues easier to diagnose from GitHub Actions logs.
+            aws_lambda_with_error_handling() {
+              # $1: Command to execute (as a single string, evaluated with 'eval')
+              # $2: Generic error message to display if the command fails without
+              #     a ResourceNotFoundException.
+              local lambda_command="$1"
+              local generic_error_message="$2"
+              local error_output
+
+              # Create a temporary file to capture stderr from the AWS-related command.
+              # Using mktemp avoids filename collisions and improves security.
+              error_output=$(mktemp)
+
+              # Debug: log the temp file path to assist in troubleshooting if needed.
+              echo "Debug: Capturing Lambda command stderr to temporary file: ${error_output}"
+
+              # Ensure that the temporary file is cleaned up on normal exit or if the
+              # shell exits due to an error. This keeps the filesystem tidy even if
+              # something unexpected happens during deployment.
+              trap 'echo "Debug: Cleaning up temporary error_output file: ${error_output}"; rm -f "${error_output}"' EXIT
+
+              # Execute the provided command, redirecting stderr into the temporary
+              # file for later inspection. We use 'eval' here because the caller
+              # passes the full command as a single string.
+              if ! eval "${lambda_command}" 2>"${error_output}"; then
+                # If the command failed, check whether the failure was due to the
+                # Lambda function being deleted concurrently (ResourceNotFoundException).
+                if grep -q "ResourceNotFoundException" "${error_output}"; then
+                  echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted after configuration update."
+                  echo "The function completed configuration update but is now missing. This may indicate concurrent deployments or manual deletion."
+                  exit 1
+                fi
+
+                # For all other failures, surface the caller-provided generic error
+                # message along with a pointer to the captured stderr for debugging.
+                echo "${generic_error_message}"
+                echo "Debug: Detailed Lambda command error output:"
+                cat "${error_output}" || echo "Debug: Unable to read temporary error_output file."
+                exit 1
+              fi
+
+              # On success, remove the EXIT trap and explicitly delete the temporary
+              # file. This avoids the trap running later with a potentially stale
+              # error_output path.
+              trap - EXIT
+              rm -f "${error_output}"
+            }
+
+            # Use the helper to perform the final readiness check for the Lambda
+            # function after configuration update. This centralizes error handling
+            # and ensures consistent behavior across different deployment paths.
+            aws_lambda_with_error_handling \
+              "wait_for_lambda_ready \"${LAMBDA_FUNCTION_NAME}\"" \
+              "Error: Lambda function is not ready after configuration update"
+          else
+            echo "Function does not exist, creating..."
+            aws lambda create-function \
+              --function-name "${LAMBDA_FUNCTION_NAME}" \
+              --runtime "${LAMBDA_RUNTIME}" \
+              --role "${{ secrets.LAMBDA_ROLE_ARN }}" \
+              --handler bootstrap \
+              --timeout "${LAMBDA_TIMEOUT}" \
+              --memory-size "${LAMBDA_MEMORY}" \
+              --zip-file fileb://function.zip \
+              --region "${AWS_REGION}" \
+              # Explicitly pass architectures as a JSON list to match AWS CLI's list-parameter expectations.
+              # This avoids ambiguity across AWS CLI versions and makes the list nature of the flag clear,
+              # while still allowing LAMBDA_ARCH (typically "arm64") to control the architecture value.
+              --architectures "[\"${LAMBDA_ARCH}\"]"
+
+            # Debugging: Log that we are now waiting for the newly created Lambda function
+            # to transition into a ready/Active state before declaring deployment success.
+            echo "Create operation completed, waiting for Lambda to become ready..."
+
+            # After creating the Lambda function, explicitly wait for it to reach
+            # a ready state. To keep behavior consistent with the update path, we capture
+            # stderr from wait_for_lambda_ready and inspect it for specific AWS errors such
+            # as ResourceNotFoundException. This provides more actionable diagnostics in rare
+            # race conditions where the function may be deleted or not yet propagated.
+            create_error_output="$(mktemp)"
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2> "${create_error_output}"; then
+              echo "Error: Lambda function did not become ready after creation"
+
+              # Debugging: Inspect stderr for a ResourceNotFoundException which can indicate
+              # that the function was deleted shortly after creation or that there is an AWS
+              # propagation delay between create-function and subsequent get-function calls.
+              if grep -q "ResourceNotFoundException" "${create_error_output}"; then
+                echo "Detailed error: AWS reported ResourceNotFoundException while waiting for"
+                echo "the newly created Lambda function to become ready. This may indicate:"
+                echo "  - The function was deleted immediately after creation, or"
+                echo "  - There is a temporary propagation delay in AWS Lambda APIs."
+              fi
+
+              echo "Full stderr output from wait_for_lambda_ready (create path):"
+              cat "${create_error_output}"
+
+              # Always clean up the temporary file before exiting to avoid cluttering the
+              # runner workspace with diagnostic files.
+              rm -f "${create_error_output}"
+              exit 1
+            fi
+
+            # The Lambda function reported as ready after creation. Remove the temporary
+            # stderr capture file now that we no longer need it for diagnostics.
+            rm -f "${create_error_output}"
+          fi
+          
+          echo "Deployment successful!"
