@@ -51,6 +51,16 @@ jobs:
       - name: Deploy to Lambda
         run: |
           # Function to wait for Lambda to be in a ready state
+          # 
+          # This function polls the Lambda function status and state to determine if it's ready
+          # for deployment operations (code/configuration updates).
+          # 
+          # Environment variable dependencies:
+          #   - FAIL_ON_PREVIOUS_FAILURE: Controls behavior when encountering a previously failed
+          #     Lambda update (LastUpdateStatus=Failed). If set to 'true' (default), the function
+          #     returns an error and aborts deployment. If set to 'false', the function proceeds
+          #     with a warning, allowing deployment to continue despite the prior failure.
+          #     This variable is defined at the workflow level (see env section).
           wait_for_lambda_ready() {
             local function_name=$1
             local max_attempts=30
