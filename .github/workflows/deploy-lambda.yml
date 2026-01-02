@@ -62,7 +62,7 @@ jobs:
             
             echo "Checking if Lambda function is ready for updates..."
             
-            while [ $attempt -le $max_attempts ]; do
+            while [[ $attempt -le $max_attempts ]]; do
               # Get all necessary Lambda function details in a single API call.
               # Note: jq is pre-installed on GitHub-hosted runners.
               # Use quoted variables here to avoid word splitting and globbing issues
@@ -75,7 +75,7 @@ jobs:
                 --output json 2>/dev/null)
               
               # Defensive parsing of function_details to avoid silent jq failures
-              if [ -z "$function_details" ]; then
+              if [[ -z "$function_details" ]]; then
                 echo "ERROR: Unable to retrieve Lambda function details (empty response from aws lambda get-function)." >&2
                 echo "DEBUG: function_name='${function_name}', region='${AWS_REGION}'" >&2
                 echo "Attempt $attempt/$max_attempts - Unable to retrieve function details"
@@ -151,7 +151,7 @@ jobs:
                   
                   # Check environment variable to determine behavior (with default).
                   # This allows deployments to optionally proceed despite a known prior failure.
-                  if [ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]; then
+                  if [[ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]]; then
                     echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
                     echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
                     echo "========================================="
