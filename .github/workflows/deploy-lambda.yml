@@ -416,12 +416,36 @@ jobs:
             echo "Create operation completed, waiting for Lambda to become ready..."
 
             # After creating the Lambda function, explicitly wait for it to reach
-            # a ready state. This mirrors the update path behavior and prevents us
-            # from reporting success while the function is still provisioning or failed.
-            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
+            # a ready state. To keep behavior consistent with the update path, we capture
+            # stderr from wait_for_lambda_ready and inspect it for specific AWS errors such
+            # as ResourceNotFoundException. This provides more actionable diagnostics in rare
+            # race conditions where the function may be deleted or not yet propagated.
+            create_error_output="$(mktemp)"
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2> "${create_error_output}"; then
               echo "Error: Lambda function did not become ready after creation"
+
+              # Debugging: Inspect stderr for a ResourceNotFoundException which can indicate
+              # that the function was deleted shortly after creation or that there is an AWS
+              # propagation delay between create-function and subsequent get-function calls.
+              if grep -q "ResourceNotFoundException" "${create_error_output}"; then
+                echo "Detailed error: AWS reported ResourceNotFoundException while waiting for"
+                echo "the newly created Lambda function to become ready. This may indicate:"
+                echo "  - The function was deleted immediately after creation, or"
+                echo "  - There is a temporary propagation delay in AWS Lambda APIs."
+              fi
+
+              echo "Full stderr output from wait_for_lambda_ready (create path):"
+              cat "${create_error_output}"
+
+              # Always clean up the temporary file before exiting to avoid cluttering the
+              # runner workspace with diagnostic files.
+              rm -f "${create_error_output}"
               exit 1
             fi
+
+            # The Lambda function reported as ready after creation. Remove the temporary
+            # stderr capture file now that we no longer need it for diagnostics.
+            rm -f "${create_error_output}"
           fi
           
           echo "Deployment successful!"
