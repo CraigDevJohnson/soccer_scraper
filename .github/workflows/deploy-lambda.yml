@@ -196,7 +196,10 @@ jobs:
               elif [[ "$state" == "Pending" ]]; then
                 echo "Lambda is in Pending state (State: $state, Status: $status). Waiting ${wait_seconds} seconds..."
               elif [[ "$state" == "Inactive" ]]; then
-                echo "WARNING: Lambda function is Inactive. Waiting for it to become Active..."
+                # INFO: Inactive indicates the function has not been invoked recently (i.e., it may be cold),
+                # and does not block configuration or code updates. We log this for operator visibility but
+                # still rely on LastUpdateStatus and other state checks above to decide readiness.
+                echo "INFO: Lambda function is currently Inactive (this is not a deployment blocker). Continuing to poll until the last update completes or times out..."
               else
                 # Log warning for unexpected states but continue waiting
                 echo "WARNING: Unexpected state combination (State: $state, Status: $status). Continuing to wait..."
