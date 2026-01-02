@@ -245,7 +245,7 @@ jobs:
             aws lambda create-function \
               --function-name "${LAMBDA_FUNCTION_NAME}" \
               --runtime "${LAMBDA_RUNTIME}" \
-              --role ${{ secrets.LAMBDA_ROLE_ARN }} \
+              --role "${{ secrets.LAMBDA_ROLE_ARN }}" \
               --handler bootstrap \
               --timeout "${LAMBDA_TIMEOUT}" \
               --memory-size "${LAMBDA_MEMORY}" \
