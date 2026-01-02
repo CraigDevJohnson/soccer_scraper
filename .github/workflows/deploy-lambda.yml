@@ -338,19 +338,63 @@ jobs:
             # in the 'create-function' branch and ensures consistent deployment
             # semantics across both paths.
             # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
-            error_output=$(mktemp)
-            trap 'rm -f "$error_output"' EXIT
-            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2>"$error_output"; then
-              if grep -q "ResourceNotFoundException" "$error_output"; then
-                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted after configuration update."
-                echo "The function completed configuration update but is now missing. This may indicate concurrent deployments or manual deletion."
+            # Helper function to execute a Lambda-related command with consistent
+            # error handling, temporary stderr capture, and cleanup semantics.
+            # This function is intentionally verbose and instrumented for debugging
+            # to make deployment issues easier to diagnose from GitHub Actions logs.
+            aws_lambda_with_error_handling() {
+              # $1: Command to execute (as a single string, evaluated with 'eval')
+              # $2: Generic error message to display if the command fails without
+              #     a ResourceNotFoundException.
+              local lambda_command="$1"
+              local generic_error_message="$2"
+              local error_output
+
+              # Create a temporary file to capture stderr from the AWS-related command.
+              # Using mktemp avoids filename collisions and improves security.
+              error_output=$(mktemp)
+
+              # Debug: log the temp file path to assist in troubleshooting if needed.
+              echo "Debug: Capturing Lambda command stderr to temporary file: ${error_output}"
+
+              # Ensure that the temporary file is cleaned up on normal exit or if the
+              # shell exits due to an error. This keeps the filesystem tidy even if
+              # something unexpected happens during deployment.
+              trap 'echo "Debug: Cleaning up temporary error_output file: ${error_output}"; rm -f "${error_output}"' EXIT
+
+              # Execute the provided command, redirecting stderr into the temporary
+              # file for later inspection. We use 'eval' here because the caller
+              # passes the full command as a single string.
+              if ! eval "${lambda_command}" 2>"${error_output}"; then
+                # If the command failed, check whether the failure was due to the
+                # Lambda function being deleted concurrently (ResourceNotFoundException).
+                if grep -q "ResourceNotFoundException" "${error_output}"; then
+                  echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted after configuration update."
+                  echo "The function completed configuration update but is now missing. This may indicate concurrent deployments or manual deletion."
+                  exit 1
+                fi
+
+                # For all other failures, surface the caller-provided generic error
+                # message along with a pointer to the captured stderr for debugging.
+                echo "${generic_error_message}"
+                echo "Debug: Detailed Lambda command error output:"
+                cat "${error_output}" || echo "Debug: Unable to read temporary error_output file."
                 exit 1
               fi
-              echo "Error: Lambda function is not ready after configuration update"
-              exit 1
-            fi
-            trap - EXIT
-            rm -f "$error_output"
+
+              # On success, remove the EXIT trap and explicitly delete the temporary
+              # file. This avoids the trap running later with a potentially stale
+              # error_output path.
+              trap - EXIT
+              rm -f "${error_output}"
+            }
+
+            # Use the helper to perform the final readiness check for the Lambda
+            # function after configuration update. This centralizes error handling
+            # and ensures consistent behavior across different deployment paths.
+            aws_lambda_with_error_handling \
+              "wait_for_lambda_ready \"${LAMBDA_FUNCTION_NAME}\"" \
+              "Error: Lambda function is not ready after configuration update"
           else
             echo "Function does not exist, creating..."
             aws lambda create-function \
