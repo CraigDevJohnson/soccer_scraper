@@ -63,11 +63,14 @@ jobs:
             echo "Checking if Lambda function is ready for updates..."
             
             while [ $attempt -le $max_attempts ]; do
-              # Get all necessary Lambda function details in a single API call
-              # Note: jq is pre-installed on GitHub-hosted runners
+              # Get all necessary Lambda function details in a single API call.
+              # Note: jq is pre-installed on GitHub-hosted runners.
+              # Use quoted variables here to avoid word splitting and globbing issues
+              # if the function name or AWS region were ever to contain spaces or
+              # shell metacharacters. This is a defensive best practice for bash.
               function_details=$(aws lambda get-function \
-                --function-name ${function_name} \
-                --region ${AWS_REGION} \
+                --function-name "${function_name}" \
+                --region "${AWS_REGION}" \
                 --query 'Configuration.{Status:LastUpdateStatus,State:State,Code:LastUpdateStatusReasonCode,Reason:LastUpdateStatusReason}' \
                 --output json 2>/dev/null)
               
