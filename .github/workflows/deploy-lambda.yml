@@ -225,6 +225,21 @@ jobs:
               --memory-size ${LAMBDA_MEMORY} \
               --region ${AWS_REGION}
 
+            # Debugging: Log that we are now waiting for the Lambda function
+            # to transition back into a ready/Active state after the configuration
+            # update. The update-function-configuration API is asynchronous, so
+            # skipping this wait could cause us to report success while the
+            # function is still updating or has failed the new configuration.
+            echo "Configuration update initiated, waiting for Lambda to become ready..."
+
+            # Final readiness check for the existing Lambda function after applying
+            # configuration changes. This mirrors the post-creation readiness check
+            # in the 'create-function' branch and ensures consistent deployment
+            # semantics across both paths.
+            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+              echo "Error: Lambda function is not ready after configuration update"
+              exit 1
+            fi
           else
             echo "Function does not exist, creating..."
             aws lambda create-function \
