@@ -121,16 +121,16 @@ jobs:
                 return 1
               fi
               
-              # Check if function is ready (Active state with Successful update or empty status for newly created functions)
-              # For newly created functions, LastUpdateStatus might be empty/not set yet
+              # Check if function is ready (Active state with Successful update or Unknown status for newly created functions)
+              # For newly created functions, LastUpdateStatus might be missing/null (parsed as "Unknown")
               # First, require the Lambda function to be in an Active state before making any
               # readiness or previous-failure decisions. This avoids treating transitional
               # states (e.g., Pending, InProgress) as if a prior update had definitively failed.
               if [[ "$state" == "Active" ]]; then
-                # When the function is Active with a Successful or empty LastUpdateStatus,
+                # When the function is Active with a Successful or Unknown LastUpdateStatus,
                 # we consider it fully ready for deployment.
-                if [[ "$status" == "Successful" || -z "$status" ]]; then
-                  if [[ -z "$status" ]]; then
+                if [[ "$status" == "Successful" || "$status" == "Unknown" ]]; then
+                  if [[ "$status" == "Unknown" ]]; then
                     echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
                   else
                     echo "Lambda function is ready!"
