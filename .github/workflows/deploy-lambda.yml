@@ -225,31 +225,79 @@ jobs:
             echo "Function exists, checking readiness..."
             
             # Wait for Lambda to be ready before updating
-            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted during deployment."
+                echo "The function existed at the start but is now missing. This may indicate concurrent deployments or manual deletion."
+                rm -f "$error_output"
+                exit 1
+              fi
+              rm -f "$error_output"
               echo "Error: Lambda function is not ready for updates after waiting"
               exit 1
             fi
+            rm -f "$error_output"
             
             echo "Updating code..."
-            aws lambda update-function-code \
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            if ! aws lambda update-function-code \
               --function-name "${LAMBDA_FUNCTION_NAME}" \
               --zip-file fileb://function.zip \
-              --region "${AWS_REGION}"
+              --region "${AWS_REGION}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted before code update."
+                echo "The function was ready but is now missing. This may indicate concurrent deployments or manual deletion."
+                rm -f "$error_output"
+                exit 1
+              fi
+              echo "ERROR: Failed to update function code. Details:"
+              cat "$error_output"
+              rm -f "$error_output"
+              exit 1
+            fi
+            rm -f "$error_output"
             
             # Wait again after code update before configuration update
-            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted after code update."
+                echo "The function completed code update but is now missing. This may indicate concurrent deployments or manual deletion."
+                rm -f "$error_output"
+                exit 1
+              fi
+              rm -f "$error_output"
               echo "Error: Lambda function is not ready after code update"
               exit 1
             fi
+            rm -f "$error_output"
             
             echo "Updating function configuration..."
-            aws lambda update-function-configuration \
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            if ! aws lambda update-function-configuration \
               --function-name "${LAMBDA_FUNCTION_NAME}" \
               --timeout "${LAMBDA_TIMEOUT}" \
               --memory-size "${LAMBDA_MEMORY}" \
               --runtime "${LAMBDA_RUNTIME}" \
               --handler bootstrap \
-              --region "${AWS_REGION}"
+              --region "${AWS_REGION}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted before configuration update."
+                echo "The function was ready after code update but is now missing. This may indicate concurrent deployments or manual deletion."
+                rm -f "$error_output"
+                exit 1
+              fi
+              echo "ERROR: Failed to update function configuration. Details:"
+              cat "$error_output"
+              rm -f "$error_output"
+              exit 1
+            fi
+            rm -f "$error_output"
 
             # Debugging: Log that we are now waiting for the Lambda function
             # to transition back into a ready/Active state after the configuration
@@ -262,10 +310,20 @@ jobs:
             # configuration changes. This mirrors the post-creation readiness check
             # in the 'create-function' branch and ensures consistent deployment
             # semantics across both paths.
-            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
+            # Capture stderr to detect ResourceNotFoundException for fast-fail behavior
+            error_output=$(mktemp)
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}" 2>"$error_output"; then
+              if grep -q "ResourceNotFoundException" "$error_output"; then
+                echo "ERROR: Lambda function '${LAMBDA_FUNCTION_NAME}' was deleted after configuration update."
+                echo "The function completed configuration update but is now missing. This may indicate concurrent deployments or manual deletion."
+                rm -f "$error_output"
+                exit 1
+              fi
+              rm -f "$error_output"
               echo "Error: Lambda function is not ready after configuration update"
               exit 1
             fi
+            rm -f "$error_output"
           else
             echo "Function does not exist, creating..."
             aws lambda create-function \
