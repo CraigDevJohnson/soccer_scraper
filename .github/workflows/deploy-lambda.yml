@@ -189,7 +189,7 @@ jobs:
             echo "ERROR: Timeout waiting for Lambda to be ready after ${total_timeout} seconds."
             echo "Final observed Lambda state - State: $state, LastUpdateStatus: $status."
             echo "Next steps:"
-            echo "  - Check the AWS Lambda console for function ${LAMBDA_FUNCTION_NAME} in region ${AWS_REGION} to confirm its current state."
+            echo "  - Check the AWS Lambda console for function \"${LAMBDA_FUNCTION_NAME}\" in region \"${AWS_REGION}\" to confirm its current state."
             echo "  - Verify that the Lambda execution role has the correct permissions and that recent configuration changes are valid."
             echo "  - Inspect recent CloudWatch Logs for this function for initialization or deployment errors."
             echo "  - If the function is stuck in Pending or Failed states, resolve any configuration or permission issues and then retry the deployment."
@@ -236,21 +236,21 @@ jobs:
             # configuration changes. This mirrors the post-creation readiness check
             # in the 'create-function' branch and ensures consistent deployment
             # semantics across both paths.
-            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
               echo "Error: Lambda function is not ready after configuration update"
               exit 1
             fi
           else
             echo "Function does not exist, creating..."
             aws lambda create-function \
-              --function-name ${LAMBDA_FUNCTION_NAME} \
-              --runtime ${LAMBDA_RUNTIME} \
+              --function-name "${LAMBDA_FUNCTION_NAME}" \
+              --runtime "${LAMBDA_RUNTIME}" \
               --role ${{ secrets.LAMBDA_ROLE_ARN }} \
               --handler bootstrap \
-              --timeout ${LAMBDA_TIMEOUT} \
-              --memory-size ${LAMBDA_MEMORY} \
+              --timeout "${LAMBDA_TIMEOUT}" \
+              --memory-size "${LAMBDA_MEMORY}" \
               --zip-file fileb://function.zip \
-              --region ${AWS_REGION} \
+              --region "${AWS_REGION}" \
               --architectures "${LAMBDA_ARCH}"
 
             # Debugging: Log that we are now waiting for the newly created Lambda function
@@ -260,7 +260,7 @@ jobs:
             # After creating the Lambda function, explicitly wait for it to reach
             # a ready state. This mirrors the update path behavior and prevents us
             # from reporting success while the function is still provisioning or failed.
-            if ! wait_for_lambda_ready ${LAMBDA_FUNCTION_NAME}; then
+            if ! wait_for_lambda_ready "${LAMBDA_FUNCTION_NAME}"; then
               echo "Error: Lambda function did not become ready after creation"
               exit 1
             fi
