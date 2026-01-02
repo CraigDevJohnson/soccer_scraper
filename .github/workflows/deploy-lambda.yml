@@ -113,44 +113,59 @@ jobs:
               
               # Check if function is ready (Active state with Successful update or empty status for newly created functions)
               # For newly created functions, LastUpdateStatus might be empty/not set yet
-              if [[ "$state" == "Active" && ( "$status" == "Successful" || -z "$status" ) ]]; then
-                if [[ -z "$status" ]]; then
-                  echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
-                else
-                  echo "Lambda function is ready!"
-                fi
-                return 0
-              elif [ "$status" = "Failed" ]; then
-                echo "========================================="
-                echo "WARNING: Previous Lambda update FAILED"
-                echo "========================================="
-                
-                # Extract error details from the same API call result
-                error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
-                error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
-                
-                # Display error information
-                echo "Error Code: ${error_code}"
-                echo "Error Reason: ${error_reason}"
-                echo ""
-                echo "Risks of proceeding:"
-                echo "  - The Lambda function may be in an inconsistent state"
-                echo "  - Previous deployment issues may not be resolved"
-                echo "  - New deployment could fail or behave unexpectedly"
-                echo "  - Underlying infrastructure or permission issues may persist"
-                echo ""
-                
-                # Check environment variable to determine behavior (with default)
-                if [ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]; then
-                  echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
-                  echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
-                  echo "========================================="
-                  return 1
-                else
-                  echo "FAIL_ON_PREVIOUS_FAILURE is set to 'false'. Proceeding with deployment."
-                  echo "NOTE: This may mask underlying issues. Consider investigating the failure."
-                  echo "========================================="
+              # First, require the Lambda function to be in an Active state before making any
+              # readiness or previous-failure decisions. This avoids treating transitional
+              # states (e.g., Pending, InProgress) as if a prior update had definitively failed.
+              if [[ "$state" == "Active" ]]; then
+                # When the function is Active with a Successful or empty LastUpdateStatus,
+                # we consider it fully ready for deployment.
+                if [[ "$status" == "Successful" || -z "$status" ]]; then
+                  if [[ -z "$status" ]]; then
+                    echo "Lambda function is Active with no LastUpdateStatus (likely newly created). Treating as ready."
+                  else
+                    echo "Lambda function is ready!"
+                  fi
                   return 0
+                elif [[ "$status" == "Failed" ]]; then
+                  # Only when the function is Active and the LastUpdateStatus is Failed do we
+                  # treat this as a previous Lambda update failure. This prevents misleading
+                  # error messages when the function is still in a non-Active transitional state.
+                  echo "========================================="
+                  echo "WARNING: Previous Lambda update FAILED (State: $state, Status: $status)"
+                  echo "========================================="
+                  
+                  # Extract error details from the same API call result for verbose debugging.
+                  error_code=$(echo "$function_details" | jq -r '.Code // "Not available"')
+                  error_reason=$(echo "$function_details" | jq -r '.Reason // "Not available"')
+                  
+                  # Display error information to aid troubleshooting.
+                  echo "Error Code: ${error_code}"
+                  echo "Error Reason: ${error_reason}"
+                  echo ""
+                  echo "Risks of proceeding:"
+                  echo "  - The Lambda function may be in an inconsistent state"
+                  echo "  - Previous deployment issues may not be resolved"
+                  echo "  - New deployment could fail or behave unexpectedly"
+                  echo "  - Underlying infrastructure or permission issues may persist"
+                  echo ""
+                  
+                  # Check environment variable to determine behavior (with default).
+                  # This allows deployments to optionally proceed despite a known prior failure.
+                  if [ "${FAIL_ON_PREVIOUS_FAILURE:-true}" = "true" ]; then
+                    echo "FAIL_ON_PREVIOUS_FAILURE is set to 'true'. Aborting deployment."
+                    echo "To proceed despite previous failure, set FAIL_ON_PREVIOUS_FAILURE=false"
+                    echo "========================================="
+                    return 1
+                  else
+                    echo "FAIL_ON_PREVIOUS_FAILURE is set to 'false'. Proceeding with deployment."
+                    echo "NOTE: This may mask underlying issues. Consider investigating the failure."
+                    echo "========================================="
+                    return 0
+                  fi
+                else
+                  # Active state with an unexpected LastUpdateStatus. Log verbosely and allow the
+                  # outer loop to continue waiting rather than making incorrect assumptions.
+                  echo "DEBUG: Active Lambda function has unexpected LastUpdateStatus (State: $state, Status: $status). Continuing to wait..."
                 fi
               fi
               
