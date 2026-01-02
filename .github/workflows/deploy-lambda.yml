@@ -210,7 +210,7 @@ jobs:
             echo "ERROR: Timeout waiting for Lambda to be ready after ${total_timeout} seconds."
             echo "Final observed Lambda state - State: $state, LastUpdateStatus: $status."
             echo "Next steps:"
-            echo "  - Check the AWS Lambda console for function \"${LAMBDA_FUNCTION_NAME}\" in region \"${AWS_REGION}\" to confirm its current state."
+            echo "  - Check the AWS Lambda console for function \"${function_name}\" in region \"${AWS_REGION}\" to confirm its current state."
             echo "  - Verify that the Lambda execution role has the correct permissions and that recent configuration changes are valid."
             echo "  - Inspect recent CloudWatch Logs for this function for initialization or deployment errors."
             echo "  - If the function is stuck in Pending or Failed states, resolve any configuration or permission issues and then retry the deployment."
