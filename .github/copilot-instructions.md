@@ -142,7 +142,7 @@ The `golang-ical` library (v0.3.2) lacks `AddDaylight()` on VTimezone. Work arou
 
 ## Known Errors & Workarounds
 
-- `go test ./...` can fail in `cmd/lambda` in local/dev environments without AWS credentials because Lambda `init()` creates AWS clients. Work around by running Lambda-package tests with `SKIP_LAMBDA_INIT=true` (for example: `SKIP_LAMBDA_INIT=true go test ./cmd/lambda/...`) or by running tests with valid AWS credentials configured.
+- Tests in `cmd/lambda` set `SKIP_LAMBDA_INIT=true` in `cmd/lambda/main_test.go` during their `init()` phase so that `go test ./cmd/lambda/...` should run without AWS credentials, even though the Lambda `init()` normally creates AWS clients. If you still see credential-related init failures (for example under unusual test invocations), you can explicitly set `SKIP_LAMBDA_INIT=true` when running the tests (for example: `SKIP_LAMBDA_INIT=true go test ./cmd/lambda/...`) or run tests with valid AWS credentials configured.
 - A previous `Deploy Lambda` workflow failure showed `/scripts/deploy-lambda.sh: line 35: stderr_output: unbound variable`. If this reappears, verify the branch includes the current `wait_for_lambda_ready` implementation in `scripts/deploy-lambda.sh` (which initializes `stderr_output`) and rerun the workflow.
 
 ## Timezone Handling
