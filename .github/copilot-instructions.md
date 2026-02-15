@@ -140,6 +140,11 @@ go build -o bin/scraper.exe ./cmd/scraper
 
 The `golang-ical` library (v0.3.2) lacks `AddDaylight()` on VTimezone. Work around by creating `&ics.Daylight{}` manually and appending to `tz.Components` (see `calendar/ics.go:addTimezone`).
 
+## Known Errors & Workarounds
+
+- Tests in `cmd/lambda` set `SKIP_LAMBDA_INIT=true` in `cmd/lambda/main_test.go` during their `init()` phase so that `go test ./cmd/lambda/...` should run without AWS credentials, even though the Lambda `init()` normally creates AWS clients. If you still see credential-related init failures (for example under unusual test invocations), you can explicitly set `SKIP_LAMBDA_INIT=true` when running the tests (for example: `SKIP_LAMBDA_INIT=true go test ./cmd/lambda/...`) or run tests with valid AWS credentials configured.
+- A previous `Deploy Lambda` workflow failure showed `/scripts/deploy-lambda.sh: line 35: stderr_output: unbound variable`. If this reappears, verify the branch includes the current `wait_for_lambda_ready` implementation in `scripts/deploy-lambda.sh` (which initializes `stderr_output`) and rerun the workflow.
+
 ## Timezone Handling
 
 All times use `America/Denver` (Mountain Time). The ICS output includes a full VTIMEZONE with DST rules (MST/MDT transitions). API times come as UTC and are converted to MT for wall-clock display.
