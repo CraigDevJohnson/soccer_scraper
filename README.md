@@ -7,7 +7,7 @@ A Go application that fetches soccer schedules from the LPS (Let's Play Soccer) 
 **Package structure:**
 
 - `cmd/lambda/` - AWS Lambda entrypoint (API Gateway HTTP API v2 + EventBridge scheduled events)
-- `cmd/scraper/` - Local CLI using urfave/cli
+- `cmd/scraper/` - Local CLI using urfave/cli v3
 - `internal/app/` - Core handler logic, request routing, response formatting
 - `internal/lps/` - LPS API client with concurrent fetching
 - `internal/calendar/` - ICS generation with proper VTIMEZONE handling
@@ -22,7 +22,7 @@ A Go application that fetches soccer schedules from the LPS (Let's Play Soccer) 
 ### Local CLI Build
 
 ```bash
-go build -o bin/scraper.exe ./cmd/scraper
+go build -o bin/scraper ./cmd/scraper
 ```
 
 ### AWS Lambda Build (ARM64 for Graviton2)
@@ -42,24 +42,54 @@ Lambda requirements:
 ### CLI Usage
 
 ```bash
-# Fetch games as JSON
-./bin/scraper.exe fetch -t 469306
+# Fetch games with the default human-readable output
+./bin/scraper fetch -t 479400
 
 # Fetch with JSON output for debugging
-./bin/scraper.exe fetch -t 469306 --json
+./bin/scraper fetch -t 479400 --json
 
 # Download and save ICS file
-./bin/scraper.exe download -t 469306 -o schedule.ics
+./bin/scraper download -t 479393 -o schedule.ics
 
 # Subscribe to email notifications for schedule changes
-./bin/scraper.exe subscribe -t 469306 -e your-email@example.com
+./bin/scraper subscribe -t 479400 -e your-email@example.com
 
 # Check for schedule changes (runs once, for scheduled jobs)
-./bin/scraper.exe check-changes
+./bin/scraper check-changes
 
 # Check a specific team for changes
-./bin/scraper.exe check-changes -t 469306
+./bin/scraper check-changes -t 479400
 ```
+
+### CLI Migration Notes
+
+- The local CLI now uses `github.com/urfave/cli/v3`.
+- Command names and flag names were preserved across the migration.
+- Help output formatting now follows urfave/cli v3, including `GLOBAL OPTIONS` in root help and `OPTIONS` in subcommand help.
+- The AWS Lambda binary in `cmd/lambda` is unaffected by the CLI framework migration.
+
+### Migration Verification
+
+The final verification commands used during the migration were:
+
+```bash
+go build -o bin/scraper ./cmd/scraper
+go test ./...
+./bin/scraper --help
+./bin/scraper fetch -t 469306 --json
+./bin/scraper download -t 479500 -o /tmp/soccer_schedule_task004_active.ics
+./bin/scraper fetch -t invalid
+./bin/scraper subscribe -t 469306 -e invalid
+./bin/scraper check-changes --help
+./bin/scraper check-changes
+./bin/scraper check-changes -t 469306
+```
+
+Verification notes:
+
+- Team `469306` still works for JSON fetch validation, but live data may contain no upcoming games.
+- Active team IDs `479393` and `479400` are preferred for documentation examples that need upcoming fixtures.
+- `check-changes` commands still parse correctly and require AWS credentials for full execution.
 
 ### Email Notifications
 
@@ -70,12 +100,14 @@ The subscribe command sets up email notifications for schedule changes:
 3. **Receive Updates**: Get notified when games are added, removed, or rescheduled
 
 **What triggers notifications:**
+
 - New games added to the schedule
 - Games cancelled or removed
 - Game time changes
 - Field changes
 
 **Schedule storage:**
+
 - Schedules are stored in DynamoDB with a 90-day TTL (covers 8-week season + buffer)
 - The `check-changes` command compares current API data with stored schedules
 - Run `check-changes` on a schedule (e.g., daily via cron or CloudWatch Events)
@@ -103,6 +135,8 @@ The subscribe command sets up email notifications for schedule changes:
 
 ### AWS Lambda Deployment
 
+The Lambda build and deployment flow is unchanged by the local CLI migration to urfave/cli v3.
+
 1. Set up GitHub repository secrets:
    - `AWS_ACCESS_KEY_ID`
    - `AWS_SECRET_ACCESS_KEY`
@@ -123,6 +157,7 @@ The email notification feature requires the following AWS resources:
    - Topics are created per team when users subscribe
 
 3. **IAM Permissions** (for Lambda or CLI):
+
    ```json
    {
      "Effect": "Allow",
@@ -149,15 +184,15 @@ The email notification feature requires the following AWS resources:
      "Resource": "arn:aws:sns:*:*:soccer-schedule-*"
    }
    ```
-   
+
    **Note**: The DynamoDB table is now created automatically on first use. The Lambda function or CLI requires permissions to create the table (`dynamodb:CreateTable`, `dynamodb:DescribeTable`, `dynamodb:UpdateTimeToLive`) on initial deployment.
 
 4. **EventBridge Scheduler** (for automatic schedule checking with timezone support):
-   
+
    The Lambda automatically detects EventBridge scheduled events (from either EventBridge Scheduler or EventBridge Rules) and runs the `check-changes` logic. Use **AWS EventBridge Scheduler** (not EventBridge Rules) to run at exactly 3 AM and 3 PM Mountain Time year-round, automatically adjusting for Daylight Saving Time.
 
    **Using AWS EventBridge Scheduler (Recommended):**
-   
+
    EventBridge Scheduler supports timezone-aware scheduling, so the schedule will always run at the correct local time regardless of DST changes. The Scheduler sends events with `source="aws.scheduler"` and `detail-type="Scheduled Event"`, which the Lambda automatically recognizes.
 
    ```bash
@@ -187,6 +222,7 @@ The email notification feature requires the following AWS resources:
    ```
 
    **Create the IAM Role for Scheduler:**
+
    ```bash
    # Create the role
    aws iam create-role \

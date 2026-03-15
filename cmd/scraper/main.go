@@ -20,12 +20,12 @@ import (
 	"github.com/CraigDevJohnson/soccer_scraper/internal/sns"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/storage"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/validate"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
-	// Create the CLI application with urfave/cli
-	cliApp := &cli.App{
+	// Create the root CLI command with urfave/cli v3.
+	rootCommand := &cli.Command{
 		Name:    "soccer-scraper",
 		Usage:   "Fetch soccer schedules and generate calendar files from the LPS API",
 		Version: app.Version,
@@ -104,17 +104,17 @@ func main() {
 		},
 	}
 
-	// Run the CLI application
-	if err := cliApp.Run(os.Args); err != nil {
+	// Run the root command using the v3 entrypoint pattern.
+	if err := rootCommand.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
 	}
 }
 
 // prepareClientAndTeams is a helper to parse team IDs and initialize the LPS client.
 // This reduces duplication in fetchAction and downloadAction.
-func prepareClientAndTeams(c *cli.Context) (*lps.Client, []string, []app.InvalidTeamID, error) {
+func prepareClientAndTeams(command *cli.Command) (*lps.Client, []string, []app.InvalidTeamID, error) {
 	// Parse and validate team IDs from the "team-ids" flag
-	teamIDsParam := c.String("team-ids")
+	teamIDsParam := command.String("team-ids")
 	validTeamIDs, invalidTeamIDs := validate.ParseTeamIDsCSV(teamIDsParam)
 
 	// Report any invalid team IDs to stdout
@@ -150,21 +150,21 @@ func reportFailedTeams(failedTeams []app.FailedTeam) {
 }
 
 // fetchAction handles the 'fetch' command to retrieve game schedules.
-func fetchAction(c *cli.Context) error {
-	client, validTeamIDs, invalidTeamIDs, err := prepareClientAndTeams(c)
+func fetchAction(ctx context.Context, command *cli.Command) error {
+	client, validTeamIDs, invalidTeamIDs, err := prepareClientAndTeams(command)
 	if err != nil {
 		return err
 	}
 
 	// Fetch games concurrently for all valid team IDs
 	fmt.Printf("\nFetching schedules for %d team(s)...\n", len(validTeamIDs))
-	games, failedTeams := client.FetchMultipleTeams(context.Background(), validTeamIDs)
+	games, failedTeams := client.FetchMultipleTeams(ctx, validTeamIDs)
 
 	// Report any failed teams
 	reportFailedTeams(failedTeams)
 
 	// Output results
-	if c.Bool("json") {
+	if command.Bool("json") {
 		// JSON output mode
 		response := app.FetchResponse{
 			Games:            games,
@@ -207,15 +207,15 @@ func fetchAction(c *cli.Context) error {
 }
 
 // downloadAction handles the 'download' command to generate an ICS calendar file.
-func downloadAction(c *cli.Context) error {
-	client, validTeamIDs, _, err := prepareClientAndTeams(c)
+func downloadAction(ctx context.Context, command *cli.Command) error {
+	client, validTeamIDs, _, err := prepareClientAndTeams(command)
 	if err != nil {
 		return err
 	}
 
 	// Fetch games concurrently for all valid team IDs
 	fmt.Printf("\nFetching schedules for %d team(s)...\n", len(validTeamIDs))
-	games, failedTeams := client.FetchMultipleTeams(context.Background(), validTeamIDs)
+	games, failedTeams := client.FetchMultipleTeams(ctx, validTeamIDs)
 
 	// Report any failed teams
 	reportFailedTeams(failedTeams)
@@ -243,7 +243,7 @@ func downloadAction(c *cli.Context) error {
 	}
 
 	// Determine output filename
-	filename := c.String("output")
+	filename := command.String("output")
 	if filename == "" {
 		// Auto-generate filename from first game's data
 		if len(games) > 0 {
@@ -269,17 +269,15 @@ func downloadAction(c *cli.Context) error {
 // subscribeAction handles the 'subscribe' command to add email notifications.
 // It creates an SNS topic for the team if needed, subscribes the email,
 // and stores the initial schedule in DynamoDB for future comparison.
-func subscribeAction(c *cli.Context) error {
-	ctx := context.Background()
-
+func subscribeAction(ctx context.Context, command *cli.Command) error {
 	// Validate team ID
-	teamIDParam := c.String("team-id")
+	teamIDParam := command.String("team-id")
 	if err := validate.TeamID(teamIDParam); err != nil {
 		return fmt.Errorf("invalid team ID: %w", err)
 	}
 
 	// Validate email using net/mail.ParseAddress (RFC 5322 compliant)
-	email := c.String("email")
+	email := command.String("email")
 	parsedEmail, err := mail.ParseAddress(email)
 	if err != nil {
 		return fmt.Errorf("invalid email format '%s': %w", email, err)
@@ -366,9 +364,7 @@ func subscribeAction(c *cli.Context) error {
 
 // checkChangesAction handles the 'check-changes' command to detect and notify schedule changes.
 // This can check a specific team or all subscribed teams.
-func checkChangesAction(c *cli.Context) error {
-	ctx := context.Background()
-
+func checkChangesAction(ctx context.Context, command *cli.Command) error {
 	// Create the checker with all required clients using the helper
 	checker, err := notify.NewCheckerWithClients(ctx)
 	if err != nil {
@@ -376,7 +372,7 @@ func checkChangesAction(c *cli.Context) error {
 	}
 
 	// Check specific team or all teams
-	teamID := c.String("team-id")
+	teamID := command.String("team-id")
 	if teamID != "" {
 		// Validate team ID
 		if err := validate.TeamID(teamID); err != nil {
