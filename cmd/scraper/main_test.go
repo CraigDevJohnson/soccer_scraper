@@ -25,14 +25,37 @@ func captureStdout(t *testing.T, callback func()) string {
 		t.Fatalf("os.Pipe() error = %v", err)
 	}
 
-	os.Stdout = writer
+	writerClosed := false
+	defer func() {
+		// Always restore stdout so later tests are not affected by this helper,
+		// even if the callback panics before normal cleanup can finish.
+		os.Stdout = originalStdout
 
-	callback()
+		// Close any remaining pipe endpoints during deferred cleanup to avoid
+		// leaking file descriptors when the callback aborts unexpectedly.
+		if !writerClosed {
+			_ = writer.Close()
+		}
+		_ = reader.Close()
+	}()
+
+	var recoveredPanic any
+	func() {
+		defer func() {
+			recoveredPanic = recover()
+		}()
+
+		os.Stdout = writer
+		callback()
+	}()
 
 	if err := writer.Close(); err != nil {
 		t.Fatalf("writer.Close() error = %v", err)
 	}
+	writerClosed = true
 
+	// Restore stdout before reading so later logging is never written into the
+	// captured pipe, even if assertions below fail.
 	os.Stdout = originalStdout
 
 	outputBytes, err := io.ReadAll(reader)
@@ -42,6 +65,10 @@ func captureStdout(t *testing.T, callback func()) string {
 
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader.Close() error = %v", err)
+	}
+
+	if recoveredPanic != nil {
+		panic(recoveredPanic)
 	}
 
 	return string(outputBytes)
@@ -75,15 +102,58 @@ func newParsedCommand(t *testing.T, flags []cli.Flag, arguments ...string) *cli.
 	return parsedCommand
 }
 
-// newTeamIDsCommand builds a parsed command containing the flags used by
-// prepareClientAndTeams, fetchAction, and downloadAction.
-func newTeamIDsCommand(t *testing.T, arguments ...string) *cli.Command {
+// newPrepareCommand builds a parsed command containing the shared team-ids
+// flag shape used by the production fetch/download commands.
+func newPrepareCommand(t *testing.T, arguments ...string) *cli.Command {
 	t.Helper()
 
 	return newParsedCommand(t, []cli.Flag{
-		&cli.StringFlag{Name: "team-ids"},
-		&cli.BoolFlag{Name: "json"},
-		&cli.StringFlag{Name: "output"},
+		&cli.StringFlag{
+			Name:     "team-ids",
+			Aliases:  []string{"t"},
+			Usage:    "Comma-separated list of 6-digit team IDs (e.g., 123456,654321)",
+			Required: true,
+		},
+	}, arguments...)
+}
+
+// newFetchCommand builds a parsed command matching the production fetch
+// command flags so tests exercise realistic CLI state.
+func newFetchCommand(t *testing.T, arguments ...string) *cli.Command {
+	t.Helper()
+
+	return newParsedCommand(t, []cli.Flag{
+		&cli.StringFlag{
+			Name:     "team-ids",
+			Aliases:  []string{"t"},
+			Usage:    "Comma-separated list of 6-digit team IDs (e.g., 123456,654321)",
+			Required: true,
+		},
+		&cli.BoolFlag{
+			Name:    "json",
+			Aliases: []string{"j"},
+			Usage:   "Output results as JSON instead of formatted text",
+		},
+	}, arguments...)
+}
+
+// newDownloadCommand builds a parsed command matching the production download
+// command flags so the test parser behavior mirrors real CLI execution.
+func newDownloadCommand(t *testing.T, arguments ...string) *cli.Command {
+	t.Helper()
+
+	return newParsedCommand(t, []cli.Flag{
+		&cli.StringFlag{
+			Name:     "team-ids",
+			Aliases:  []string{"t"},
+			Usage:    "Comma-separated list of 6-digit team IDs (e.g., 123456,654321)",
+			Required: true,
+		},
+		&cli.StringFlag{
+			Name:    "output",
+			Aliases: []string{"o"},
+			Usage:   "Output filename for the ICS file (default: auto-generated)",
+		},
 	}, arguments...)
 }
 
@@ -92,8 +162,18 @@ func newSubscribeCommand(t *testing.T, arguments ...string) *cli.Command {
 	t.Helper()
 
 	return newParsedCommand(t, []cli.Flag{
-		&cli.StringFlag{Name: "team-id"},
-		&cli.StringFlag{Name: "email"},
+		&cli.StringFlag{
+			Name:     "team-id",
+			Aliases:  []string{"t"},
+			Usage:    "6-digit team ID to subscribe to (e.g., 469306)",
+			Required: true,
+		},
+		&cli.StringFlag{
+			Name:     "email",
+			Aliases:  []string{"e"},
+			Usage:    "Email address to receive notifications",
+			Required: true,
+		},
 	}, arguments...)
 }
 
@@ -102,7 +182,11 @@ func newCheckChangesCommand(t *testing.T, arguments ...string) *cli.Command {
 	t.Helper()
 
 	return newParsedCommand(t, []cli.Flag{
-		&cli.StringFlag{Name: "team-id"},
+		&cli.StringFlag{
+			Name:    "team-id",
+			Aliases: []string{"t"},
+			Usage:   "Specific team ID to check (optional, checks all if not provided)",
+		},
 	}, arguments...)
 }
 
@@ -139,13 +223,13 @@ func Test_prepareClientAndTeams(t *testing.T) {
 	}{
 		{
 			name:               "valid team IDs create a client",
-			command:            newTeamIDsCommand(t, "--team-ids", "123456,654321"),
+			command:            newPrepareCommand(t, "--team-ids", "123456,654321"),
 			wantValidTeamIDs:   []string{"123456", "654321"},
 			wantInvalidTeamIDs: []app.InvalidTeamID{},
 		},
 		{
 			name:    "mixed valid and invalid team IDs return partial results",
-			command: newTeamIDsCommand(t, "--team-ids", "123456,123456,abcdef"),
+			command: newPrepareCommand(t, "--team-ids", "123456,123456,abcdef"),
 			wantValidTeamIDs: []string{
 				"123456",
 			},
@@ -157,7 +241,7 @@ func Test_prepareClientAndTeams(t *testing.T) {
 		},
 		{
 			name:               "invalid-only team IDs return an error",
-			command:            newTeamIDsCommand(t, "--team-ids", "abcdef"),
+			command:            newPrepareCommand(t, "--team-ids", "abcdef"),
 			wantErr:            true,
 			wantOutputContains: []string{"Invalid team IDs:", "abcdef: team ID 'abcdef' must be exactly 6 digits"},
 		},
@@ -272,13 +356,13 @@ func Test_fetchAction(t *testing.T) {
 	}{
 		{
 			name:               "invalid team IDs fail before fetch",
-			command:            newTeamIDsCommand(t, "--team-ids", "abcdef"),
+			command:            newFetchCommand(t, "--team-ids", "abcdef"),
 			wantErrContains:    "no valid team IDs provided",
 			wantOutputContains: []string{"Invalid team IDs:", "abcdef: team ID 'abcdef' must be exactly 6 digits"},
 		},
 		{
 			name:            "empty team IDs fail validation",
-			command:         newTeamIDsCommand(t),
+			command:         newFetchCommand(t, "--team-ids", ""),
 			wantErrContains: "no valid team IDs provided",
 		},
 	}
@@ -316,13 +400,13 @@ func Test_downloadAction(t *testing.T) {
 	}{
 		{
 			name:               "invalid team IDs fail before download",
-			command:            newTeamIDsCommand(t, "--team-ids", "abcdef"),
+			command:            newDownloadCommand(t, "--team-ids", "abcdef"),
 			wantErrContains:    "no valid team IDs provided",
 			wantOutputContains: []string{"Invalid team IDs:", "abcdef: team ID 'abcdef' must be exactly 6 digits"},
 		},
 		{
 			name:            "empty team IDs fail validation",
-			command:         newTeamIDsCommand(t),
+			command:         newDownloadCommand(t, "--team-ids", ""),
 			wantErrContains: "no valid team IDs provided",
 		},
 	}
