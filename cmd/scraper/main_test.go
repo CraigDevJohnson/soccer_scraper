@@ -76,6 +76,8 @@ func captureStdout(t *testing.T, callback func()) string {
 	}
 
 	if recoveredPanic != nil {
+		// Re-panic after cleanup to preserve the original test failure behavior
+		// while still guaranteeing stdout restoration and pipe cleanup.
 		panic(recoveredPanic)
 	}
 
