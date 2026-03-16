@@ -37,7 +37,7 @@ This is a Go application that fetches soccer schedules from the LPS (Let's Play 
 **Package structure:**
 
 - `cmd/lambda/` - AWS Lambda entrypoint (API Gateway HTTP API v2 + EventBridge scheduled events)
-- `cmd/scraper/` - Local CLI using urfave/cli
+- `cmd/scraper/` - Local CLI using urfave/cli v3
 - `internal/app/` - Core handler logic, request routing, response formatting
 - `internal/lps/` - LPS API client with concurrent fetching
 - `internal/calendar/` - ICS generation with proper VTIMEZONE handling
@@ -60,7 +60,7 @@ This is a Go application that fetches soccer schedules from the LPS (Let's Play 
 
 ```bash
 # Local CLI build
-go build -o bin/scraper.exe ./cmd/scraper
+go build -o bin/scraper ./cmd/scraper
 
 # Lambda build (ARM64 for Graviton2)
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap ./cmd/lambda
@@ -93,7 +93,7 @@ Lambda requires:
 ## Testing
 
 **Unit Tests:**
-- Currently no unit tests exist (all packages show `[no test files]`)
+- Unit tests currently exist for `cmd/lambda` in `cmd/lambda/main_test.go`; many other packages still show `[no test files]`
 - When adding tests, follow Go testing conventions:
   - Place test files next to the code they test with `_test.go` suffix
   - Use table-driven tests for multiple test cases
@@ -105,32 +105,49 @@ Lambda requires:
 **Manual Testing:**
 ```bash
 # Build the CLI first
-go build -o bin/scraper.exe ./cmd/scraper
+go build -o bin/scraper ./cmd/scraper
 
 # Test CLI fetch
-./bin/scraper.exe fetch -t 469306
+./bin/scraper fetch -t 479400
 
 # Test CLI download
-./bin/scraper.exe download -t 469306 -o test.ics
+./bin/scraper download -t 479393 -o test.ics
 
 # JSON output for debugging
-./bin/scraper.exe fetch -t 469306 --json
+./bin/scraper fetch -t 469306 --json
 
 # Test with multiple teams
-./bin/scraper.exe fetch -t 469306,123456
+./bin/scraper fetch -t 479393,479400
 
 # Test invalid team ID handling
-./bin/scraper.exe fetch -t invalid
+./bin/scraper fetch -t invalid
 
 # Test email subscription (requires AWS credentials)
-./bin/scraper.exe subscribe -t 469306 -e your-email@example.com
+./bin/scraper subscribe -t 479400 -e your-email@example.com
 
 # Test schedule change detection (requires AWS credentials and existing subscriptions)
-./bin/scraper.exe check-changes
+./bin/scraper check-changes
 
 # Test schedule change detection for specific team
-./bin/scraper.exe check-changes -t 469306
+./bin/scraper check-changes -t 479400
 ```
+
+**CLI Migration Verification:**
+```bash
+go build -o bin/scraper ./cmd/scraper
+go test ./...
+./bin/scraper --help
+./bin/scraper fetch -t 469306 --json
+./bin/scraper download -t 479500 -o /tmp/soccer_schedule_task004_active.ics
+./bin/scraper fetch -t invalid
+./bin/scraper subscribe -t 469306 -e invalid
+./bin/scraper check-changes --help
+./bin/scraper check-changes
+./bin/scraper check-changes -t 469306
+```
+
+- The local CLI migration preserves command and flag names while adopting urfave/cli v3 help formatting.
+- The Lambda binary in `cmd/lambda` does not depend on urfave/cli and is unaffected by the CLI migration.
 
 **Lambda Testing:**
 - Lambda function can be tested locally with AWS SAM or similar tools
@@ -190,7 +207,7 @@ All times use `America/Denver` (Mountain Time). The ICS output includes a full V
 - Key dependencies:
   - `github.com/arran4/golang-ical` v0.3.2 - ICS calendar generation
   - `github.com/aws/aws-lambda-go` v1.51.1 - Lambda runtime
-  - `github.com/urfave/cli/v2` v2.27.7 - CLI framework
+  - `github.com/urfave/cli/v3` v3.7.0 - CLI framework
   - `golang.org/x/sync` v0.19.0 - Concurrency primitives (errgroup)
 
 ## Common Tasks

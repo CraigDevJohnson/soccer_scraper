@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/CraigDevJohnson/soccer_scraper/internal/app"
 	"github.com/CraigDevJohnson/soccer_scraper/internal/lps"
@@ -26,12 +27,23 @@ var handler *app.Handler
 // init runs during Lambda cold start to initialize the handler.
 // This is done in init() rather than main() to ensure the handler
 // is ready before any invocations are processed.
-// During testing, this is skipped if SKIP_LAMBDA_INIT=true.
+// During testing, this is skipped if SKIP_LAMBDA_INIT=true or when the
+// package is running inside a Go test binary.
 func init() {
-	if os.Getenv("SKIP_LAMBDA_INIT") == "true" {
+	if shouldSkipLambdaInit() {
 		return
 	}
 	initHandler()
+}
+
+// shouldSkipLambdaInit avoids eager AWS client initialization in tests, where
+// the package may be loaded before test-file init hooks can set environment variables.
+func shouldSkipLambdaInit() bool {
+	if os.Getenv("SKIP_LAMBDA_INIT") == "true" {
+		return true
+	}
+
+	return strings.HasSuffix(os.Args[0], ".test")
 }
 
 // initHandler initializes the handler if it hasn't been initialized yet.
