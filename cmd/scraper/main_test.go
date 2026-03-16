@@ -26,6 +26,7 @@ func captureStdout(t *testing.T, callback func()) string {
 	}
 
 	writerClosed := false
+	readerClosed := false
 	defer func() {
 		// Always restore stdout so later tests are not affected by this helper,
 		// even if the callback panics before normal cleanup can finish.
@@ -34,9 +35,15 @@ func captureStdout(t *testing.T, callback func()) string {
 		// Close any remaining pipe endpoints during deferred cleanup to avoid
 		// leaking file descriptors when the callback aborts unexpectedly.
 		if !writerClosed {
-			_ = writer.Close()
+			if cleanupErr := writer.Close(); cleanupErr != nil {
+				t.Logf("writer.Close() cleanup error = %v", cleanupErr)
+			}
 		}
-		_ = reader.Close()
+		if !readerClosed {
+			if cleanupErr := reader.Close(); cleanupErr != nil {
+				t.Logf("reader.Close() cleanup error = %v", cleanupErr)
+			}
+		}
 	}()
 
 	var recoveredPanic any
@@ -49,10 +56,10 @@ func captureStdout(t *testing.T, callback func()) string {
 		callback()
 	}()
 
+	writerClosed = true
 	if err := writer.Close(); err != nil {
 		t.Fatalf("writer.Close() error = %v", err)
 	}
-	writerClosed = true
 
 	// Restore stdout before reading so later logging is never written into the
 	// captured pipe, even if assertions below fail.
@@ -63,6 +70,7 @@ func captureStdout(t *testing.T, callback func()) string {
 		t.Fatalf("io.ReadAll() error = %v", err)
 	}
 
+	readerClosed = true
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader.Close() error = %v", err)
 	}
